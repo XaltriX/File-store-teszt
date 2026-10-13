@@ -32,7 +32,7 @@
  "verified": "✅ Step verified.",
  "lang_saved": "✅ Language updated.",
  "a_dashboard": "⚡ <b>ADMIN DASHBOARD</b>\n\nWelcome back, Admin. 👋\n\n👥 <b>Total Users:</b> {users}\n📂 <b>Stored Files:</b> {files}\n📢 <b>Active Channels:</b> {channels}\n📥 <b>Total Requests:</b> {requests}\n\n<i>Select an option to manage your bot.</i>",
- "a_stats": "📊 <b>Statistics</b>\n\n👥 Users: {users} (reachable: {audience}, new 7d: {new_7d})\n📂 Active files: {files}\n🔗 Active links: {links}\n\n📥 Link opens: {requests}\n✅ Deliveries OK: {deliveries_ok}\n❌ Deliveries failed: {deliveries_failed}\n\n📢 Public joins confirmed: {public_confirmed}\n📨 Private join requests received: {private_requests}\n<i>(requests are not confirmed membership)</i>\n\n📣 Broadcast sent: {broadcast_ok} / failed: {broadcast_failed}\n\n<b>New users per day</b>\n{days}",
+ "a_stats": "📊 <b>Statistics</b>\n\n👥 Users: {users} (reachable: {audience}, new 7d: {new_7d})\n📂 Active files: {files}\n🔗 Active links: {links}\n\n📥 Link opens: {requests}\n✅ Deliveries OK: {deliveries_ok}\n❌ Deliveries failed: {deliveries_failed}\n\n📢 Public joins confirmed: {public_confirmed}\n📨 Join requests (unique users, our link): {private_requests}\n<i>Total since stats began, not “pending”. A request is not membership. Repeats and other links are counted per channel.</i>\n\n📣 Broadcast sent: {broadcast_ok} / failed: {broadcast_failed}\n\n<b>New users per day</b>\n{days}",
  "a_files_menu": "📂 <b>Files</b>\n\nSend any file straight to this chat, or post it in your DB channel, and a permanent link is created automatically.",
  "a_file_saved": "✅ <b>File saved</b>\n\n📄 {name}\n📦 {ftype} · {size}\n\n🔗 <code>{url}</code>",
  "a_file_duplicate": "♻️ <b>Already stored</b> — existing record reused.\n\n📄 {name}\n📦 {ftype} · {size}\n\n🔗 <code>{url}</code>",
@@ -56,7 +56,7 @@
  "a_channel_added_private": "✅ <b>{title}</b> added (private — a join request event completes the step; requests are never auto-approved).",
  "a_channel_bad_invite": "⚠️ That is not a valid invite link (https://t.me/+… or https://t.me/joinchat/…).",
  "a_channel_list": "📋 <b>Channels</b> ({total})",
- "a_channel_stats_row": "<b>{title}</b>\nMode: {mode} · Active: {active}\n📤 Presented: {presented}\n✅ Public joins confirmed: {joins}\n📨 Private requests received: {requests}\n❌ Failed checks: {failed} · API errors: {errors}\n🕒 Last activity: {last}",
+ "a_channel_stats_row": "<b>{title}</b>\nMode: {mode} · Active: {active}\n📤 Cards shown: {presented}\n✅ Public joins (via bot): {joins}\n📨 Join requests, unique users via our link: {requests}\n🔁 Repeat requests: {repeat} · via other/old links: {other}\n❌ Failed checks: {failed} · API errors: {errors}\n🕒 Last activity: {last}",
  "a_channel_gone": "Channel not found.",
  "a_channel_need_invite_short": "Bot can't create a join-request link there. Check the “Invite users” right.",
  "a_channel_no_username": "This channel has no public username, so it can't switch to public mode.",
@@ -93,10 +93,13 @@
  "a_autodelete": "🧹 <b>Auto-delete timer</b>\n\nCurrent: {cur}\nApplies to temporary status/error messages. Verification cards stay for the whole 30-minute flow and are removed when the file is delivered. Delivered files and permanent links are never deleted by this timer.",
  "a_languages": "🌐 <b>Language options</b>\n\nToggle which languages users can pick, and set the default. Disabling a language never deletes user records; those users fall back to the default.",
  "a_lang_keep": "Keep at least one language enabled, and don't disable the default.",
- "a_dbch_menu": "🗄 <b>DB Channel</b>\n\nCurrent: <b>{current}</b>\nReply with link in channel: <b>{reply}</b>\n\nAdd the bot as admin of a private channel and set it here. Every file posted in that channel is saved automatically and its link is sent to you in this chat.",
+ "a_dbch_menu": "🗄 <b>DB Channel</b>\n\nCurrent: <b>{current}</b>\nReply with link in channel: <b>{reply}</b>\n\nAdd the bot as admin of a private channel and set it here. Files posted there are saved automatically, and files you send to the bot are copied there as a durable backup. Links are sent to you in this chat.",
  "a_dbch_set": "🗄 Send the DB channel @username, -100… ID, or forward a message from it.\n\nThe bot must be an admin there (enable “Post messages” so it can reply with links).",
  "a_dbch_set_ok": "✅ DB channel set: <b>{title}</b>",
  "a_dbch_not_channel": "⚠️ Only a channel can be used as the DB channel.",
  "a_dbch_reply": "🔗 <code>{url}</code>",
- "a_saved_preview": "✅ Saved and applied. A preview is shown above (it disappears in a few minutes); /start shows the live card."
+ "a_saved_preview": "✅ Saved and applied. A preview is shown above (it disappears in a few minutes); /start shows the live card.",
+ "file_deleting": "⏳ <b>Auto-delete:</b> this file will be removed in <b>{minutes} min</b>. Forward or save it now. Open the link again to get it back.",
+ "a_filead": "🗑 <b>File auto-delete</b>\n\nCurrent: <b>{cur}</b>\n<b>Auto</b> removes each delivered media after its own length + 1 minute (a 2-min video stays 3 min); files without a length (documents, photos) use 5 min. Users can reopen the link to get the file again.",
+ "a_dbch_copy_failed": "⚠️ Couldn't copy the file into the DB channel (the bot needs “Post messages” there). It was saved without a backup copy."
 }

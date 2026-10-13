@@ -137,7 +137,7 @@ async def manage(cb: CallbackQuery, ctx, t) -> None:
 def channel_stats_text(t, c: dict) -> str:
     last = c.get("last_activity")
     return t("a_channel_stats_row", title=esc(c["title"]), mode=c["mode"], active="yes" if c["active"] else "no",
-             presented=c.get("presented", 0), joins=c.get("joins_confirmed", 0), requests=c.get("requests_received", 0),
+             presented=c.get("presented", 0), joins=c.get("joins_confirmed", 0), requests=c.get("requests_received", 0), repeat=c.get("requests_repeat", 0), other=c.get("requests_other", 0),
              failed=c.get("failed_checks", 0), errors=c.get("errors", 0),
              last=last.strftime("%Y-%m-%d %H:%M") if last else "-")
 

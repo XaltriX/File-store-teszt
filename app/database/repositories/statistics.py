@@ -12,16 +12,16 @@ COUNTERS = ("requests", "deliveries_ok", "deliveries_failed", "public_confirmed"
 
 
 class StatisticsRepo:
-    def __init__(self, col):
-        self.col = col
+    def __init__(self, col, writer):
+        self.col, self.w = col, writer
 
     async def inc(self, counter: str, n: int = 1) -> None:
         assert counter in COUNTERS
-        await self.col.update_one({"_id": "global"}, {"$inc": {counter: n}}, upsert=True)
+        await self.w.inc(self.col, "global", counter, n, upsert=True)
 
     async def inc_new_user(self) -> None:
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        await self.col.update_one({"_id": f"day:{day}"}, {"$inc": {"new_users": 1}}, upsert=True)
+        await self.w.inc(self.col, f"day:{day}", "new_users", 1, upsert=True)
 
     async def totals(self) -> dict:
         doc = await self.col.find_one({"_id": "global"}) or {}

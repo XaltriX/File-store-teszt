@@ -12,6 +12,7 @@ from app.handlers.admin import (broadcasts, channel_management, dashboard, file_
                                 settings, statistics)
 from app.handlers.admin.broadcasts import make_notifier
 from app.middlewares.admin_auth import AdminAuthMiddleware
+from app.middlewares.concurrency import ConcurrencyMiddleware
 from app.middlewares.language import UserContextMiddleware
 from app.middlewares.throttle import ThrottleMiddleware
 
@@ -23,9 +24,11 @@ def build_dispatcher(ctx) -> Dispatcher:
     # flows, links, settings and broadcast jobs are all persisted in MongoDB.
     dp = Dispatcher(storage=MemoryStorage(), ctx=ctx)
     throttle = ThrottleMiddleware(ctx.cfg.admin_ids)
+    concurrency = ConcurrencyMiddleware(admin_ids=ctx.cfg.admin_ids)
     users = UserContextMiddleware(ctx)
     for obs in (dp.message, dp.callback_query):
         obs.outer_middleware(throttle)
+        obs.outer_middleware(concurrency)
         obs.outer_middleware(users)
 
     admin = Router(name="admin")

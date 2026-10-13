@@ -9,9 +9,11 @@ def B(text: str, **kw) -> _B:
     return _B(text=bold(text), **kw)
 
 
-def language_keyboard(enabled: list[str]) -> M:
+def language_keyboard(enabled: list[str], token: str | None = None) -> M:
+    """token: pending file-link token, carried in the button so the file flow resumes after choosing."""
+    suffix = f":{token}" if token else ""
     codes = [c for c in LANGUAGES if c in enabled] or ["en"]
-    rows = [[B(LANGUAGES[c], callback_data=f"l:{c}") for c in codes[i:i + 2]] for i in range(0, len(codes), 2)]
+    rows = [[B(LANGUAGES[c], callback_data=f"l:{c}{suffix}") for c in codes[i:i + 2]] for i in range(0, len(codes), 2)]
     return M(inline_keyboard=rows)
 
 

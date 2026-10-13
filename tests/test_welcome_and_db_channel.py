@@ -129,7 +129,7 @@ async def test_welcome_video_is_saved_immediately_and_shown_on_next_start(env):
 
     start_msg = NS(chat=NS(id=5), from_user=NS(id=5, first_name="Ann", language_code="en"))
     s = await env.repos.settings.get()
-    await cmd_start(start_msg, NS(args=None), FakeState({}), ctx, {"language": "en"}, "en", t, s)
+    await cmd_start(start_msg, NS(args=None), FakeState({}), ctx, {"language": "en", "lang_chosen": True}, "en", t, s)
     name, kw = env.bot.calls[0]
     assert name == "send_video" and kw["video"] == "VID1" and "Ann" in kw["caption"]
 
@@ -167,7 +167,7 @@ async def test_start_for_admin_includes_panel_button_and_user_does_not(env):
     for uid, expect in ((1, True), (2, False)):
         env.bot.calls.clear()
         m = NS(chat=NS(id=uid), from_user=NS(id=uid, first_name="X", language_code="en"))
-        await cmd_start(m, NS(args=None), FakeState({}), ctx, {"language": "en"}, "en", t, s)
+        await cmd_start(m, NS(args=None), FakeState({}), ctx, {"language": "en", "lang_chosen": True}, "en", t, s)
         kb = env.bot.calls[0][1]["reply_markup"]
         assert any(b.callback_data == "a:home" for r in kb.inline_keyboard for b in r) is expect
 
@@ -188,3 +188,62 @@ async def test_admin_panel_replaces_a_media_message_instead_of_captioning_it():
         async def edit_caption(self, **k): calls.append("caption")
     await show(Media(), "panel")
     assert calls == ["delete", "answer"]
+
+
+# ---- language first, also for direct file links
+from app.handlers.language import choose_language  # noqa: E402
+from app.keyboards.user import language_keyboard  # noqa: E402
+from app.utils.tokens import generate_token  # noqa: E402
+from tests.conftest import make_file  # noqa: E402
+
+
+def _lang_ctx(env):
+    return NS(repos=env.repos, bot=env.bot, i18n=env.i18n, verification=env.verification, delivery=env.delivery,
+              welcome=WelcomeService(env.bot, env.repos, env.i18n), lifecycle=NS(schedule=_noop),
+              cfg=NS(admin_ids=frozenset({1}), flow_ttl_seconds=1800))
+
+
+async def test_new_user_opening_file_link_is_asked_for_language_first(env):
+    f, link = await make_file(env)
+    answered = []
+
+    async def answer(text, reply_markup=None): answered.append((text, reply_markup))
+    msg = NS(chat=NS(id=5), from_user=NS(id=5, first_name="Ann", language_code="hi"), answer=answer)
+    t = lambda k, **kw: env.i18n.t("en", k, **kw)  # noqa: E731
+    s = await env.repos.settings.get()
+    await cmd_start(msg, NS(args=link["token"]), FakeState({}), _lang_ctx(env), {"language": None}, "en", t, s)
+    assert len(answered) == 1 and env.bot.calls == []          # prompt only: no file, no verification yet
+    datas = [b.callback_data for r in answered[0][1].inline_keyboard for b in r]
+    assert len(datas) == 7 and all(d.endswith(":" + link["token"]) and len(d.encode()) <= 64 for d in datas)
+
+
+async def test_choosing_language_continues_into_the_file_flow(env):
+    f, link = await make_file(env)
+    answered = []
+
+    async def cb_answer(text=None, **k): answered.append(text)
+    cb = NS(data=f"l:ta:{link['token']}", from_user=NS(id=5, first_name="Ann"), answer=cb_answer,
+            message=NS(delete=_noop))
+    await choose_language(cb, _lang_ctx(env), await env.repos.settings.get())
+    assert env.bot.sent("send_video")                               # no channels -> file delivered right away
+    assert env.bot.sent("send_video")[0][1]["caption"].startswith("⚡")
+
+
+async def test_choosing_language_without_token_shows_welcome(env):
+    cb = NS(data="l:mr", from_user=NS(id=5, first_name="Ann"), answer=_noop, message=NS(delete=_noop))
+    await choose_language(cb, _lang_ctx(env), await env.repos.settings.get())
+    assert env.bot.sent("send_message") and not env.bot.sent("send_video")
+
+
+async def test_language_for_known_user_goes_straight_to_the_file(env):
+    f, link = await make_file(env)
+    m = NS(chat=NS(id=5), from_user=NS(id=5, first_name="A", language_code="en"))
+    t = lambda k, **kw: env.i18n.t("ta", k, **kw)  # noqa: E731
+    await cmd_start(m, NS(args=link["token"]), FakeState({}), _lang_ctx(env), {"language": "ta", "lang_chosen": True}, "ta", t,
+                    await env.repos.settings.get())
+    assert env.bot.sent("send_video")
+
+
+def test_language_keyboard_without_token_is_plain():
+    d = [b.callback_data for r in language_keyboard(["en", "hi"]).inline_keyboard for b in r]
+    assert d == ["l:en", "l:hi"]

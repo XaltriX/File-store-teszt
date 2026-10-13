@@ -12,6 +12,7 @@ from app.handlers.admin.common import drop, edit_panel, page_of, show, temp
 from app.keyboards.admin import btn, cancel, confirm, files_menu, kb
 from app.keyboards.pagination import pager_row
 from app.states.file_upload import FileUpload
+from app.services.file_service import extract_file_info
 from app.utils.fancy import bold
 from app.utils.formatting import chunk_text, esc, human_size, share_url
 
@@ -195,9 +196,22 @@ async def protection(cb: CallbackQuery, ctx, t) -> None:
 # ------------------------------------------------------------------ direct save: admin just sends a file
 @router.message(StateFilter(None))
 async def direct_save(m: Message, ctx, t) -> None:
-    res = await ctx.files.ingest(m)
-    if res is None:
+    info = extract_file_info(m)
+    if info is None:
         return  # not a file: nothing to do
+    store = None
+    db = (await ctx.repos.settings.get()).get("db_channel")
+    existing = await ctx.repos.files.get_by_unique(info["file_unique_id"])
+    if db and not (existing and existing.get("store")):
+        try:  # keep a durable copy in the DB channel and deliver from it later
+            copied = await ctx.bot.copy_message(db["id"], m.chat.id, m.message_id)
+            store = {"chat_id": db["id"], "message_id": copied.message_id}
+        except TelegramAPIError as e:
+            log.warning("copy to DB channel failed: %s", type(e).__name__)
+            await temp(ctx, m.chat.id, t("a_dbch_copy_failed"))
+    res = await ctx.files.ingest(m, store=store)
+    if res is None:
+        return
     file, link, created = res
     url = ctx.links.deep_link(link["token"])
     text = t("a_file_saved" if created else "a_file_duplicate", name=esc(_fname(file)),

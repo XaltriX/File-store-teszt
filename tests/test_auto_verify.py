@@ -17,7 +17,7 @@ async def test_already_joined_public_user_skips_card_entirely(env):
     step = await env.verification.start(U, link["token"])
     assert step.kind == "deliver"
     ch = await env.repos.channels.get(-1001)
-    assert ch["joins_confirmed"] == 1 and ch["failed_checks"] == 0
+    assert ch["joins_confirmed"] == 0 and ch["failed_checks"] == 0  # pre-existing member is not a join we caused
 
 
 async def test_opening_link_as_non_member_shows_card_without_counting_a_failure(env):

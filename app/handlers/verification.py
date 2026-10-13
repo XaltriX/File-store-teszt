@@ -94,7 +94,8 @@ async def _present_all(ctx, user_id: int, steps: list[Step]) -> None:
 async def on_join_request(req: ChatJoinRequest, ctx) -> None:
     """Records the request only. NEVER approves or declines it. Auto-advances the user's flow."""
     ts = int(req.date.timestamp()) if req.date else 0
-    steps = await ctx.verification.on_join_request(req.chat.id, req.from_user.id, ts)
+    link = req.invite_link.invite_link if getattr(req, "invite_link", None) else None
+    steps = await ctx.verification.on_join_request(req.chat.id, req.from_user.id, ts, link)
     await _present_all(ctx, req.from_user.id, steps)
 
 

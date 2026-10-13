@@ -21,7 +21,7 @@ async def auto_import(post: Message, ctx) -> None:
     if not db or post.chat.id != db["id"]:
         return
     try:
-        res = await ctx.files.ingest(post)
+        res = await ctx.files.ingest(post, store={"chat_id": post.chat.id, "message_id": post.message_id})
     except Exception:  # noqa: BLE001
         log.exception("auto-import failed chat=%s", post.chat.id)
         return

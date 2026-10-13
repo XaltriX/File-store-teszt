@@ -22,9 +22,10 @@ def extract_file_info(m) -> dict | None:
     else:
         return None
     name = getattr(o, "file_name", None) or getattr(o, "title", None)
+    dur = getattr(o, "duration", None)  # video / audio / voice / animation / video_note only
     return {"file_id": o.file_id, "file_unique_id": o.file_unique_id, "ftype": t, "name": name,
             "size": getattr(o, "file_size", None), "mime": getattr(o, "mime_type", None),
-            "caption": m.caption}
+            "caption": m.caption, "duration": int(dur) if isinstance(dur, (int, float)) and dur > 0 else None}
 
 
 def source_info(m) -> dict | None:
@@ -41,11 +42,12 @@ class FileService:
     def __init__(self, repos, links):
         self.repos, self.links = repos, links
 
-    async def ingest(self, message, source: dict | None = None, order: int = 0):
-        """Returns (file, link, created) or None when the message has no file."""
+    async def ingest(self, message, source: dict | None = None, order: int = 0, store: dict | None = None):
+        """Returns (file, link, created) or None when the message has no file.
+        store = {chat_id, message_id} of the copy kept in the DB channel (preferred delivery source)."""
         info = extract_file_info(message)
         if info is None:
             return None
-        file, created = await self.repos.files.create(**info, source=source or source_info(message), order=order)
+        file, created = await self.repos.files.create(**info, source=source or source_info(message), order=order, store=store)
         link = await self.links.get_or_create(file["_id"])
         return file, link, created

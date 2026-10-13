@@ -179,6 +179,23 @@ async def autodelete(cb: CallbackQuery, ctx, t) -> None:
     await cb.answer()
 
 
+@router.callback_query(F.data.regexp(r"^a:t:fd(:(\d+|auto))?$"))
+async def file_autodelete(cb: CallbackQuery, ctx, t) -> None:
+    parts = cb.data.split(":")
+    if len(parts) == 4:
+        val = -1 if parts[3] == "auto" else int(parts[3])
+        if val in (-1, 0, 60, 300, 600, 1800, 3600):
+            await ctx.repos.settings.update(file_autodelete_seconds=val)
+    cur = (await ctx.repos.settings.get())["file_autodelete_seconds"]
+    label = "auto (video length + 1 min)" if cur == -1 else (f"{cur // 60} min" if cur else "off")
+    opts = [("auto", -1, "Auto"), ("0", 0, "Off"), ("60", 60, "1m"), ("300", 300, "5m"), ("600", 600, "10m"),
+            ("1800", 1800, "30m"), ("3600", 3600, "1h")]
+    rows = [[btn(("● " if cur == v else "") + lbl, f"a:t:fd:{k}") for k, v, lbl in opts[:3]],
+            [btn(("● " if cur == v else "") + lbl, f"a:t:fd:{k}") for k, v, lbl in opts[3:]]]
+    await show(cb, t("a_filead", cur=label), kb(*rows, [btn("↩️ Settings", "a:t")]))
+    await cb.answer()
+
+
 # ------------------------------------------------------------------ languages
 async def _lang_screen(cb, ctx, t) -> None:
     s = await ctx.repos.settings.get()

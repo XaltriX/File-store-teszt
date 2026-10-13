@@ -1,5 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
+import time
+from collections import OrderedDict
 from datetime import datetime, timezone
 
 from app.utils.tokens import is_valid_token
@@ -13,8 +15,11 @@ class Resolution:
 
 
 class LinkService:
-    def __init__(self, repos, bot_username: str):
-        self.repos, self.bot_username = repos, bot_username
+    TTL, MAX = 30.0, 2000
+
+    def __init__(self, repos, bot_username: str, clock=time.monotonic):
+        self.repos, self.bot_username, self.clock = repos, bot_username, clock
+        self._cache: OrderedDict[str, tuple[float, tuple, Resolution]] = OrderedDict()
 
     def deep_link(self, token: str) -> str:
         return f"https://t.me/{self.bot_username}?start={token}"
@@ -26,8 +31,22 @@ class LinkService:
         return await self.repos.links.first_active_for_file(file_id) or await self.create(file_id)
 
     async def resolve(self, token: str | None) -> Resolution:
+        """Cached 30 s; any file/link mutation bumps a repo version and drops stale entries."""
         if not is_valid_token(token):
             return Resolution("invalid")
+        ver = (self.repos.files.version, self.repos.links.version)
+        hit = self._cache.get(token)
+        if hit and hit[1] == ver and self.clock() - hit[0] < self.TTL:
+            self._cache.move_to_end(token)
+            return hit[2]
+        res = await self._resolve_db(token)
+        if res.status == "ok" and not res.link.get("expires_at"):  # only cache plain, permanent hits
+            self._cache[token] = (self.clock(), ver, res)
+            while len(self._cache) > self.MAX:
+                self._cache.popitem(last=False)
+        return res
+
+    async def _resolve_db(self, token: str) -> Resolution:
         link = await self.repos.links.get(token)
         if not link:
             return Resolution("invalid")

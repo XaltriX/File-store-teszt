@@ -3,3 +3,4 @@ pymongo==4.13.2
 python-dotenv==1.0.1
 pytest==8.3.3
 pytest-asyncio==0.24.0
+uvloop==0.21.0; sys_platform != "win32"

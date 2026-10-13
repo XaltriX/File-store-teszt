@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import logging
+import os
 import signal
 import sys
 
@@ -42,12 +43,17 @@ async def main() -> int:
 
     # Drop any webhook so exactly one long-polling consumer exists.
     await ctx.bot.delete_webhook(drop_pending_updates=False)
+    ctx.writer.start()
     ctx.lifecycle.start()
+    health = None
+    if os.environ.get("PORT"):  # only when the platform needs a bound port (Heroku web dyno etc.)
+        from app.utils.health import start_health_server
+        health = await start_health_server(int(os.environ["PORT"]))
     await ctx.broadcast.resume_unfinished()
     log.info("started as @%s", ctx.bot_username)
 
     polling = asyncio.create_task(dp.start_polling(
-        ctx.bot, handle_as_tasks=False, handle_signals=False,
+        ctx.bot, handle_as_tasks=True, handle_signals=False,
         allowed_updates=["message", "callback_query", "chat_join_request", "chat_member", "channel_post"]))
     waiter = asyncio.create_task(stop.wait())
     done, _ = await asyncio.wait({polling, waiter}, return_when=asyncio.FIRST_COMPLETED)
@@ -61,10 +67,17 @@ async def main() -> int:
     await asyncio.gather(polling, waiter, return_exceptions=True)
     await ctx.broadcast.shutdown()
     await ctx.lifecycle.stop()
+    await ctx.writer.stop()  # flush buffered counters / delete schedules before closing the DB
+    if health:
+        await health.cleanup()
     await ctx.bot.session.close()
     await ctx.mongo.close()
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))   
+    try:
+        import uvloop  # faster event loop where available (Linux/Heroku)
+        sys.exit(asyncio.run(main(), loop_factory=uvloop.new_event_loop))
+    except ImportError:
+        sys.exit(asyncio.run(main()))

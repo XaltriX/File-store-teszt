@@ -1,4 +1,7 @@
 from __future__ import annotations
+import copy
+import time
+
 DEFAULTS: dict = {
     "welcome_text": None,          # None -> localized default
     "welcome_image": None,         # legacy photo file_id (read-only fallback)
@@ -9,7 +12,8 @@ DEFAULTS: dict = {
     "official_channels": [],       # [{"title","url"}]
     "about_text": None,
     "default_protect": False,
-    "autodelete_seconds": 60,      # 0 disables
+    "autodelete_seconds": 60,      # temporary status/error messages; 0 disables
+    "file_autodelete_seconds": -1,   # delivered files: -1 = auto (media length + 1 min), 0 = off, >0 = fixed seconds
     "required_steps": 1,
     "balancing": "least",          # least | random
     "enabled_languages": ["en", "hi", "bn", "mr", "te", "ta", "gu"],
@@ -20,16 +24,25 @@ DEFAULTS: dict = {
 
 
 class SettingsRepo:
-    def __init__(self, col):
-        self.col = col
+    """Read-heavy single document: cached in-process for a few seconds, invalidated on every write
+    (the bot runs as one process, so its own writes are always visible immediately)."""
+
+    def __init__(self, col, ttl: float = 5.0, clock=time.monotonic):
+        self.col, self.ttl, self.clock = col, ttl, clock
+        self._cache: tuple[float, dict] | None = None
 
     async def get(self) -> dict:
+        now = self.clock()
+        if self._cache and now - self._cache[0] < self.ttl:
+            return copy.deepcopy(self._cache[1])
         doc = await self.col.find_one({"_id": "global"}) or {}
         out = {**DEFAULTS, **{k: v for k, v in doc.items() if k != "_id"}}
-        return out
+        self._cache = (now, out)
+        return copy.deepcopy(out)
 
     async def update(self, **fields) -> None:
         bad = set(fields) - set(DEFAULTS)
         if bad:
             raise KeyError(f"unknown settings: {bad}")
         await self.col.update_one({"_id": "global"}, {"$set": fields}, upsert=True)
+        self._cache = None

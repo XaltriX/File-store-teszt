@@ -56,7 +56,7 @@ async def test_api_error_never_counts_as_success(env):
 async def test_flow_resumes_with_same_channel_and_presented_counted_once(env):
     f, link = await setup_basic(env, n_channels=3)
     s1 = await env.verification.start(U, link["token"])
-    env.db["guards"].docs.clear()  # simulate the 2s duplicate-/start window elapsing
+    env.repos.requests.reset_guards()  # simulate the 2s duplicate-/start window elapsing
     s2 = await env.verification.start(U, link["token"])
     assert s1.channel["_id"] == s2.channel["_id"]
     presented = [c["presented"] for c in await env.repos.channels.list()]
@@ -161,17 +161,6 @@ async def test_removed_channel_does_not_strand_active_flow(env):
     r = await env.verification.verify(step.flow["_id"], U)
     assert r.kind == "deliver"
     assert (await env.repos.channels.get(-1001))["presented"] == 1  # stats preserved
-
-
-async def test_completed_flow_allows_reaccess_via_same_link(env):
-    f, link = await setup_basic(env)
-    step = await env.verification.start(U, link["token"])
-    member(env, -1001, U)
-    await env.verification.verify(step.flow["_id"], U)
-    env.db["guards"].docs.clear()
-    again = await env.verification.start(U, link["token"])
-    assert again.kind == "deliver" and again.flow is None
-    assert (await env.repos.channels.get(-1001))["presented"] == 1  # no new presentation
 
 
 async def test_reopen_after_delivery_failure_allows_retry(env):

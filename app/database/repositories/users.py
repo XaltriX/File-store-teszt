@@ -1,4 +1,6 @@
 from __future__ import annotations
+import time
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 
 
@@ -7,11 +9,28 @@ def now() -> datetime:
 
 
 class UsersRepo:
-    def __init__(self, col):
-        self.col = col
+    CACHE_TTL, CACHE_MAX = 60.0, 5000
+
+    def __init__(self, col, writer, clock=time.monotonic):
+        self.col, self.w, self.clock = col, writer, clock
+        self._cache: OrderedDict[int, tuple[float, dict]] = OrderedDict()
+
+    def _remember(self, doc: dict) -> None:
+        self._cache[doc["_id"]] = (self.clock(), dict(doc))
+        self._cache.move_to_end(doc["_id"])
+        while len(self._cache) > self.CACHE_MAX:
+            self._cache.popitem(last=False)
 
     async def touch(self, uid: int, first_name, last_name, username) -> tuple[dict, bool]:
-        """Create or refresh a user. Returns (doc, is_new). Writes throttled to 1/5min."""
+        """Create or refresh a user. Returns (doc, is_new). Cached 60 s; DB writes throttled to 1/5min."""
+        hit = self._cache.get(uid)
+        if hit and self.clock() - hit[0] < self.CACHE_TTL:
+            return dict(hit[1]), False
+        doc, is_new = await self._touch_db(uid, first_name, last_name, username)
+        self._remember(doc)
+        return dict(doc), is_new
+
+    async def _touch_db(self, uid: int, first_name, last_name, username) -> tuple[dict, bool]:
         t = now()
         doc = await self.col.find_one({"_id": uid})
         if doc is None:
@@ -35,13 +54,28 @@ class UsersRepo:
         return doc, False
 
     async def get(self, uid: int):
-        return await self.col.find_one({"_id": uid})
+        hit = self._cache.get(uid)
+        if hit and self.clock() - hit[0] < self.CACHE_TTL:
+            return dict(hit[1])
+        doc = await self.col.find_one({"_id": uid})
+        if doc:
+            self._remember(doc)
+        return doc
+
+    async def set_fsub(self, uid: int, channel_ids: list[int]) -> None:
+        """Remember which channels the user last satisfied (returning users skip flows entirely)."""
+        if uid in self._cache:
+            self._cache[uid][1]["fsub_ids"] = list(channel_ids)
+        await self.w.set(self.col, uid, {"fsub_ids": list(channel_ids)}, upsert=True)
 
     async def set_language(self, uid: int, lang: str) -> None:
-        await self.col.update_one({"_id": uid}, {"$set": {"language": lang}})
+        await self.col.update_one({"_id": uid}, {"$set": {"language": lang, "lang_chosen": True}})
+        if uid in self._cache:
+            self._cache[uid][1].update(language=lang, lang_chosen=True)
 
     async def mark_blocked(self, uid: int, blocked: bool = True) -> None:
         await self.col.update_one({"_id": uid}, {"$set": {"blocked": blocked}})
+        self._cache.pop(uid, None)
 
     async def count(self) -> int:
         return await self.col.estimated_document_count()

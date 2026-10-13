@@ -29,8 +29,11 @@ def test_errors_never_leak_secret_values():
 async def test_mongo_unavailable_fails_clearly_at_startup(monkeypatch):
     import app.database.mongo as m
 
+    seen = {}
+
     class DeadClient:
         def __init__(self, *a, **k):
+            seen.update(k)
             self.admin = self
             self.closed = False
 
@@ -44,6 +47,8 @@ async def test_mongo_unavailable_fails_clearly_at_startup(monkeypatch):
     with pytest.raises(m.DatabaseUnavailable) as e:
         await m.connect("mongodb://x", "db")
     assert "hunter2" not in str(e.value)
+    # every DB operation is bounded, so a dead connection can't hang the bot
+    assert seen["socketTimeoutMS"] and seen["connectTimeoutMS"] and seen["waitQueueTimeoutMS"] and seen["maxPoolSize"]
 
 
 def test_log_redaction():

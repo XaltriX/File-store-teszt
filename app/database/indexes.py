@@ -15,7 +15,6 @@ async def ensure_indexes(db) -> None:
     await db["flows"].create_index([("expires_at", A)], expireAfterSeconds=0)
     await db["join_requests"].create_index([("chat_id", A), ("user_id", A), ("request_ts", A)], unique=True)
     await db["join_requests"].create_index([("created_at", A)], expireAfterSeconds=30 * 86400)
-    await db["guards"].create_index([("expires_at", A)], expireAfterSeconds=0)
     await db["broadcast_deliveries"].create_index([("bid", A), ("uid", A)], unique=True)
     await db["broadcasts"].create_index([("status", A)])
     await db["pending_deletes"].create_index([("due", A)])

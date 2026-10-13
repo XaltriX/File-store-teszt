@@ -28,7 +28,8 @@ def env():
     e.i18n = Localizer()
     e.links = LinkService(e.repos, "testbot")
     e.files = FileService(e.repos, e.links)
-    e.verification = VerificationService(e.bot, e.repos, e.links, rng=__import__("random").Random(1))
+    e.verification = VerificationService(e.bot, e.repos, e.links, rng=__import__("random").Random(1),
+                                         member_cache_ttl=0)
     e.delivery = DeliveryService(e.bot, e.repos, e.i18n, e.links)
 
     async def _noop(_):
@@ -38,9 +39,9 @@ def env():
     return e
 
 
-async def make_file(env, uid="u1", name="a.mp4", ftype="video"):
+async def make_file(env, uid="u1", name="a.mp4", ftype="video", duration=None):
     f, _ = await env.repos.files.create(file_id=f"F-{uid}", file_unique_id=uid, ftype=ftype, name=name,
-                                        size=10, mime="video/mp4", caption=None)
+                                        size=10, mime="video/mp4", caption=None, duration=duration)
     link = await env.links.get_or_create(f["_id"])
     return f, link
 

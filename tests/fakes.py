@@ -110,6 +110,11 @@ class FakeCollection:
     def find(self, flt=None, projection=None):
         return Cursor(copy.deepcopy(self._find(flt)))
 
+    async def insert_many(self, docs, ordered=True):
+        for d in docs:
+            await FakeCollection.insert_one(self, d)  # one round-trip, however many docs
+        return Result()
+
     async def insert_one(self, doc):
         doc.setdefault("_id", __import__("uuid").uuid4().hex)  # pymongo assigns _id the same way
         self._check_unique(doc)
@@ -220,3 +225,34 @@ class FakeBot:
 
     def sent(self, method):
         return [c for c in self.calls if c[0] == method]
+
+
+class _CountingCollection(FakeCollection):
+    def __init__(self, owner, *a, **k):
+        super().__init__(*a, **k)
+        self.owner = owner
+
+
+def _counted(name):
+    async def run(self, *a, **k):
+        self.owner.ops += 1
+        return await getattr(FakeCollection, name)(self, *a, **k)
+    return run
+
+
+for _n in ("find_one", "insert_one", "insert_many", "update_one", "update_many", "find_one_and_update",
+           "delete_one", "delete_many", "count_documents", "estimated_document_count"):
+    setattr(_CountingCollection, _n, _counted(_n))
+
+
+class CountingDB(FakeDB):
+    """FakeDB that counts every DB round-trip (cursor reads count once per find())."""
+
+    def __init__(self):
+        super().__init__()
+        self.ops = 0
+
+    def __getitem__(self, name):
+        if name not in self.cols:
+            self.cols[name] = _CountingCollection(self, self.UNIQUE.get(name))
+        return self.cols[name]
