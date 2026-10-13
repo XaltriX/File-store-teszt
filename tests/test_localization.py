@@ -12,7 +12,7 @@ def load(code):
 
 def test_all_seven_languages_cover_every_user_facing_key():
     en = {k for k in load("en") if not k.startswith("a_")}
-    assert set(LANGUAGES) == {"en", "hi", "bn", "es", "ar", "pt", "zh"}
+    assert set(LANGUAGES) == {"en", "hi", "bn", "mr", "te", "ta", "gu"}
     for code in LANGUAGES:
         assert {k for k in load(code) if not k.startswith("a_")} == en, code
 
@@ -39,7 +39,7 @@ def test_html_tags_balanced():
     import re
     for code in LANGUAGES:
         for k, v in load(code).items():
-            for tag in ("b", "i", "code"):
+            for tag in ("b", "i", "code", "blockquote"):
                 assert len(re.findall(f"<{tag}>", v)) == len(re.findall(f"</{tag}>", v)), (code, k)
 
 
@@ -51,16 +51,23 @@ def test_fallback_to_english_for_missing_key_and_unknown_language():
     assert i.t("en", "no_such_key") == "no_such_key"
 
 
-def test_formatting_and_rtl_marker():
+def test_formatting_and_brand_name_in_every_language():
     i = Localizer()
-    assert "Ann" in i.t("en", "welcome", name="Ann")
-    assert all(ln.startswith("\u200f") for ln in i.t("ar", "err_invalid").split("\n") if ln.strip())
+    for code in LANGUAGES:
+        w = i.t(code, "welcome", name="Ann")
+        assert "Ann" in w and "𝗟𝗨𝗦𝗧 𝗧𝗘𝗔𝗖𝗛𝗘𝗥 𝗕𝗢𝗧" in w and "<blockquote>" in w
+        assert "𝗟𝗨𝗦𝗧 𝗧𝗘𝗔𝗖𝗛𝗘𝗥 𝗕𝗢𝗧" in i.t(code, "about")
+
+
+def test_removed_languages_fall_back_to_default():
+    i = Localizer()
+    assert i.normalize("es") == "en" and i.normalize("zh-CN") == "en" and i.normalize("ta-IN") == "ta"
 
 
 def test_normalize_respects_enabled_languages():
     i = Localizer()
-    assert i.normalize("pt-BR", ["en", "pt"]) == "pt"
-    assert i.normalize("pt-BR", ["en"]) == "en"
+    assert i.normalize("mr-IN", ["en", "mr"]) == "mr"
+    assert i.normalize("mr-IN", ["en"]) == "en"
     assert i.normalize(None) == "en"
 
 
@@ -68,7 +75,7 @@ async def test_language_persists_across_touches_and_missing_value_falls_back(env
     u = env.repos.users
     doc, new = await u.touch(5, "A", None, "a")
     assert new and doc["language"] is None
-    await u.set_language(5, "es")
+    await u.set_language(5, "gu")
     doc2, new2 = await u.touch(5, "A2", None, "a")
-    assert not new2 and doc2["language"] == "es"
-    assert (await u.get(5))["language"] == "es"
+    assert not new2 and doc2["language"] == "gu"
+    assert (await u.get(5))["language"] == "gu"

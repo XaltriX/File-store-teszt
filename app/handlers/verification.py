@@ -3,10 +3,10 @@ import logging
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import CallbackQuery, ChatJoinRequest
+from aiogram.types import CallbackQuery, ChatJoinRequest, ChatMemberUpdated
 
 from app.keyboards.user import retry_keyboard, verify_keyboard
-from app.services.verification_service import Step
+from app.services.verification_service import Step, is_member
 from app.utils.messaging import edit_or_send
 
 log = logging.getLogger(__name__)
@@ -46,7 +46,8 @@ async def present_step(ctx, user_id: int, lang: str, step: Step, edit_message=No
             log.warning("prompt send failed: %s", type(e).__name__)
             return
         await ctx.repos.requests.set_message(flow["_id"], user_id, m.message_id)
-        await ctx.lifecycle.schedule(user_id, m.message_id)
+        # the card lives as long as the flow (not the short auto-delete timer): it holds the Verify button
+        await ctx.lifecycle.schedule(user_id, m.message_id, ctx.cfg.flow_ttl_seconds)
     elif step.kind == "deliver":
         if edit_message is not None:
             await _delete_quiet(ctx.bot, edit_message.chat.id, edit_message.message_id)
@@ -81,15 +82,26 @@ async def on_verify(cb: CallbackQuery, ctx, lang: str) -> None:
     await present_step(ctx, cb.from_user.id, lang, step, edit_message=cb.message)
 
 
-@router.chat_join_request()
-async def on_join_request(req: ChatJoinRequest, ctx) -> None:
-    """Records the request only. NEVER approves or declines it."""
-    ts = int(req.date.timestamp()) if req.date else 0
-    steps = await ctx.verification.on_join_request(req.chat.id, req.from_user.id, ts)
-    if not steps:
-        return
-    user = await ctx.repos.users.get(req.from_user.id)
+async def _present_all(ctx, user_id: int, steps: list[Step]) -> None:
+    user = await ctx.repos.users.get(user_id)
     s = await ctx.repos.settings.get()
     lang = ctx.i18n.normalize((user or {}).get("language"), s["enabled_languages"])
     for step in steps:
-        await present_step(ctx, req.from_user.id, lang, step)
+        await present_step(ctx, user_id, lang, step)
+
+
+@router.chat_join_request()
+async def on_join_request(req: ChatJoinRequest, ctx) -> None:
+    """Records the request only. NEVER approves or declines it. Auto-advances the user's flow."""
+    ts = int(req.date.timestamp()) if req.date else 0
+    steps = await ctx.verification.on_join_request(req.chat.id, req.from_user.id, ts)
+    await _present_all(ctx, req.from_user.id, steps)
+
+
+@router.chat_member()
+async def on_chat_member(upd: ChatMemberUpdated, ctx) -> None:
+    """User just became a member of a pool channel (needs the bot to be admin there)."""
+    if not is_member(upd.new_chat_member) or is_member(upd.old_chat_member):
+        return
+    steps = await ctx.verification.on_member_joined(upd.chat.id, upd.new_chat_member.user.id)
+    await _present_all(ctx, upd.new_chat_member.user.id, steps)

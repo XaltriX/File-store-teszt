@@ -6,6 +6,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.utils.telegram_errors import is_blocked, is_retryable, retry_after
+from app.utils.fancy import bold
 from app.utils.formatting import share_url
 
 log = logging.getLogger(__name__)
@@ -27,7 +28,7 @@ class DeliveryService:
         return bool((await self.repos.settings.get()).get("default_protect"))
 
     def share_keyboard(self, lang: str, token: str) -> InlineKeyboardMarkup:
-        btn = InlineKeyboardButton(text=self.i18n.t(lang, "btn_share"), url=share_url(self.links.deep_link(token)))
+        btn = InlineKeyboardButton(text=bold(self.i18n.t(lang, "btn_share")), url=share_url(self.links.deep_link(token)))
         return InlineKeyboardMarkup(inline_keyboard=[[btn]])
 
     async def deliver(self, user_id: int, lang: str, file: dict, link: dict) -> str | None:

@@ -16,13 +16,13 @@ log = logging.getLogger(__name__)
 router = Router(name="admin-settings")
 
 # fields whose change is previewed on the real welcome card before it is applied
-PREVIEWED = {"welcome_text", "welcome_image", "welcome_buttons", "more_videos_url", "developer_url"}
-PROMPT = {"welcome_image": "a_set_image", "welcome_text": "a_set_text", "welcome_buttons": "a_set_buttons",
+PREVIEWED = {"welcome_text", "welcome_media", "welcome_buttons", "more_videos_url", "developer_url"}
+PROMPT = {"welcome_media": "a_set_image", "welcome_text": "a_set_text", "welcome_buttons": "a_set_buttons",
           "more_videos_url": "a_set_url", "developer_url": "a_set_url", "official_channels": "a_set_channels",
           "about_text": "a_set_about"}
-SCREEN = {"wi": "welcome_image", "wt": "welcome_text", "wb": "welcome_buttons", "mv": "more_videos_url",
+SCREEN = {"wi": "welcome_media", "wt": "welcome_text", "wb": "welcome_buttons", "mv": "more_videos_url",
           "dv": "developer_url", "oc": "official_channels", "ab": "about_text"}
-EMPTY = {"welcome_buttons": [], "official_channels": [], "welcome_image": None, "welcome_text": None,
+EMPTY = {"welcome_buttons": [], "official_channels": [], "welcome_media": None, "welcome_text": None,
          "more_videos_url": None, "developer_url": None, "about_text": None}
 MAX_LINES = {"welcome_buttons": 6, "official_channels": 20}
 
@@ -46,8 +46,8 @@ def parse_pairs(text: str, limit: int) -> list[dict] | None:
 
 def current_value_text(field: str, s: dict) -> str:
     v = s.get(field)
-    if field == "welcome_image":
-        return "set" if v else "none"
+    if field == "welcome_media":
+        return f"{v['type']} set" if isinstance(v, dict) else "none"
     if isinstance(v, list):
         return "\n".join(f"• {esc(i.get('text') or i.get('title'))} → {esc(i['url'])}" for i in v) or "none"
     return esc(v) if v else "default / none"
@@ -105,11 +105,16 @@ async def got_value(m: Message, state: FSMContext, ctx, t, lang: str, settings: 
     field = d["field"]
     await drop(m)
     value = None
-    if field == "welcome_image":
-        if not m.photo:
+    if field == "welcome_media":
+        if m.animation:
+            value = {"type": "animation", "file_id": m.animation.file_id}
+        elif m.video:
+            value = {"type": "video", "file_id": m.video.file_id}
+        elif m.photo:
+            value = {"type": "photo", "file_id": m.photo[-1].file_id}
+        else:
             await temp(ctx, m.chat.id, t("a_need_photo"))
             return
-        value = m.photo[-1].file_id
     elif m.text is None:
         await temp(ctx, m.chat.id, t("a_need_text"))
         return

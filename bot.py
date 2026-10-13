@@ -48,7 +48,7 @@ async def main() -> int:
 
     polling = asyncio.create_task(dp.start_polling(
         ctx.bot, handle_as_tasks=False, handle_signals=False,
-        allowed_updates=["message", "callback_query", "chat_join_request", "channel_post"]))
+        allowed_updates=["message", "callback_query", "chat_join_request", "chat_member", "channel_post"]))
     waiter = asyncio.create_task(stop.wait())
     done, _ = await asyncio.wait({polling, waiter}, return_when=asyncio.FIRST_COMPLETED)
     log.info("shutting down")

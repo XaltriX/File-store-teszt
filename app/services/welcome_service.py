@@ -4,13 +4,24 @@ from aiogram.types import InlineKeyboardMarkup
 from app.keyboards.user import welcome_keyboard
 from app.utils.formatting import esc
 
+SEND = {"photo": ("send_photo", "photo"), "video": ("send_video", "video"), "animation": ("send_animation", "animation")}
+
+
+def welcome_media(s: dict) -> dict | None:
+    m = s.get("welcome_media")
+    if m and m.get("type") in SEND:
+        return m
+    if s.get("welcome_image"):  # legacy setting
+        return {"type": "photo", "file_id": s["welcome_image"]}
+    return None
+
 
 class WelcomeService:
     def __init__(self, bot, repos, i18n):
         self.bot, self.repos, self.i18n = bot, repos, i18n
 
-    def render_text(self, lang: str, settings: dict, first_name: str | None, override: str | None = None) -> str:
-        custom = override if override is not None else settings.get("welcome_text")
+    def render_text(self, lang: str, settings: dict, first_name: str | None) -> str:
+        custom = settings.get("welcome_text")
         name = esc(first_name or "")
         if custom:
             lines = esc(custom).replace("{first_name}", name).split("\n")
@@ -18,18 +29,13 @@ class WelcomeService:
             return "\n".join(lines)
         return self.i18n.t(lang, "welcome", name=name)
 
-    def keyboard(self, lang: str, settings: dict, buttons=None) -> InlineKeyboardMarkup:
-        s = dict(settings)
-        if buttons is not None:
-            s["welcome_buttons"] = buttons
-        return welcome_keyboard(lambda k: self.i18n.t(lang, k), s)
+    def keyboard(self, lang: str, settings: dict) -> InlineKeyboardMarkup:
+        return welcome_keyboard(lambda k: self.i18n.t(lang, k), settings)
 
-    async def send(self, chat_id: int, lang: str, first_name: str | None, settings: dict | None = None,
-                   override_text=None, override_image="__keep__", override_buttons=None):
+    async def send(self, chat_id: int, lang: str, first_name: str | None, settings: dict | None = None):
         s = settings or await self.repos.settings.get()
-        text = self.render_text(lang, s, first_name, override_text)
-        kb = self.keyboard(lang, s, override_buttons)
-        image = s.get("welcome_image") if override_image == "__keep__" else override_image
-        if image:
-            return await self.bot.send_photo(chat_id, image, caption=text, reply_markup=kb)
+        text, kb, media = self.render_text(lang, s, first_name), self.keyboard(lang, s), welcome_media(s)
+        if media:
+            method, key = SEND[media["type"]]
+            return await getattr(self.bot, method)(chat_id, **{key: media["file_id"]}, caption=text, reply_markup=kb)
         return await self.bot.send_message(chat_id, text, reply_markup=kb)

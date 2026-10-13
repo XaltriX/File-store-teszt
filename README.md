@@ -1,8 +1,9 @@
-# File Store Bot
+# LUST TEACHER BOT
 
-Telegram file-store bot: permanent deep links, force-subscription verification (public membership check or
-private join-request events), per-file content protection, multilingual UI (EN/HI/BN/ES/AR/PT/ZH), full
-admin panel in inline buttons, broadcasts, MongoDB persistence, Heroku worker deployment.
+Telegram file-store bot: permanent deep links, DB-channel auto-save, force-subscription with **auto-verify**
+(public membership / private join requests), per-file content protection, UI in English, Hindi, Bengali,
+Marathi, Telugu, Tamil, Gujarati, bold inline buttons, welcome photo/video/GIF, inline admin panel,
+broadcasts, MongoDB persistence, Heroku worker deployment.
 
 Stack: Python 3.12, aiogram 3.13 (Bot API, no `API_ID`/`API_HASH`), PyMongo async API, pytest.
 
@@ -13,12 +14,16 @@ Stack: Python 3.12, aiogram 3.13 (Bot API, no `API_ID`/`API_HASH`), PyMongo asyn
 | Delivery | Stores Telegram `file_id` only (nothing downloaded). Sends by stored type with `protect_content` and a **Share** URL button (`t.me/share/url?url=<encoded deep link>`). |
 | Links | 128-bit `secrets.token_urlsafe` tokens (22 chars), unique index. Many links per file; revoking one never touches others. |
 | Flows | Persisted in `flows`. Channels are chosen once (least-presented, random tie-break, distinct) and never re-rolled on Verify. `presented` is incremented atomically at assignment. |
+| Auto-verify | On link open the bot first checks every assigned channel: users who already joined (or already sent a join request) skip the card. While waiting, `chat_member` updates (public/any channel) and `chat_join_request` updates advance the flow and deliver the file automatically, with no button press. Requires the bot to be **admin** in each channel. |
+| DB channel | Files → DB Channel: set a channel (bot = admin). Every file posted there is saved and its link is DM'd to the admin who set it, plus optionally replied inside the channel (needs "Post messages"). Admins can also just send a file to the bot (no button) to get a link. |
+| Welcome media | Photo, video or GIF (50 MB bot limit; 3-8 s loops work best). Preview before apply. |
+| Bold buttons | Telegram buttons can't carry HTML, so Latin letters/digits use Unicode bold glyphs. Indic scripts have no bold glyphs and stay normal. |
 | Public channel | Step completes only when `getChatMember` says member/admin/creator. API errors never complete a step. |
 | Private channel | Step completes only after a `chat_join_request` event (deduplicated by chat+user+request time). Requests are **never approved/declined** and are counted separately from joins. |
 | Idempotency | `mark_done` is an atomic conditional update; `claim_completion` (`find_one_and_update`) elects exactly one deliverer; 2s `/start` guard and 5s repeat-access guard use an atomic TTL guard. |
 | Delivery failure | Flow is re-opened so the user can press Verify again. |
 | Repeat access | Completed flows are kept 30 days; opening the same link again delivers without re-verifying. After that, verification restarts. |
-| Auto-delete | One persisted queue (`pending_deletes`) + one worker. Verification prompts/status messages only (default 60 s, admin-configurable, 0 = off). Delivered files are never auto-deleted. Survives restarts. |
+| Auto-delete | One persisted queue (`pending_deletes`) + one worker. Status/error messages use the admin timer (default 60 s, 0 = off). Verification cards live for the whole 30-min flow and are removed on delivery. Delivered files are never auto-deleted. Survives restarts. |
 | Broadcasts | `copy_message` of the admin's message. Job doc holds counters + cursor; per-recipient outcome is one small doc in `broadcast_deliveries` (unique `(bid, uid)`), so resume never re-sends. 20 msgs/s batches, bounded retries with backoff+jitter, blocked users marked and skipped, graceful shutdown marks the job `interrupted` and it resumes on next start. |
 | Admin auth | `AdminAuthMiddleware` on the admin router checks `ADMIN_IDS` on every message and callback. Forged `a:*` callbacks from non-admins are rejected. |
 | FSM | Admin input flows use in-memory FSM storage (short-lived by design). Everything durable is in MongoDB. |
@@ -27,10 +32,12 @@ Stack: Python 3.12, aiogram 3.13 (Bot API, no `API_ID`/`API_HASH`), PyMongo asyn
 ### Deliberate deviations / interpretations
 - If fewer active channels exist than the configured steps (1–3), the flow requires fewer steps instead of repeating a channel.
 - With zero active channels, files are delivered directly.
+- A join-request event on any pool channel (even one added in public mode) completes that step, since such an event only exists when the channel requires approval.
+- Welcome card carries an "18+ only" line (edit `welcome` in `app/localization/*.json` to remove).
 - Deep-link users with no saved language skip the language prompt (language is guessed from Telegram's `language_code` and saved), so a file is never blocked behind a menu. `/start` without a payload asks for the language once.
 - Welcome/About custom text is plain text (escaped); first line becomes the bold title; `{first_name}` is supported. One custom text applies to all languages (the built-in default is translated).
 - Admin operational labels (button captions, admin panels) are English; all user-facing text is translated. Admin text strings still live in `en.json` (`a_*` keys).
-- Bot API cannot read channel history: **Import** works by forwarding channel messages to the bot, or by enabling **Watch** on a pool channel (bot must be channel admin) so new media posts are imported.
+- Bot API cannot read channel history: **Import** works by forwarding channel messages to the bot, or by enabling **Watch** on a pool channel (bot must be channel admin); the DB channel is the primary, automatic way so new media posts are imported.
 - Settings has two extra entries beyond the brief: Official Channels list and About text.
 - `handlers/admin/welcome_editor.py` from the suggested tree is folded into `settings.py` (same router, preview-before-apply flow).
 
@@ -67,7 +74,8 @@ Indexes (including TTL indexes) are created automatically at startup. No transac
 1. Create the bot with @BotFather; put the token in `BOT_TOKEN`.
 2. For each force-subscribe channel add the bot as **admin**. Public channels need no extra right. Private channels need **Invite users** so the bot can create a join-request link (otherwise paste an invite link created with *Request admin approval* enabled).
 3. Send `/admin` to the bot and use **Channels → Add Channel**.
-4. Set More Videos / Developer URLs in **Settings** (the buttons show "not configured" until you do; no URLs are invented).
+4. Optional: Files → **DB Channel** (private channel, bot admin) so every posted file gets a link automatically.
+5. Set More Videos / Developer URLs in **Settings** (the buttons show "not configured" until you do; no URLs are invented).
 
 ## Heroku deployment
 ```powershell
@@ -86,7 +94,8 @@ Never run the bot locally and on Heroku with the same token at once (Telegram al
 
 ## Known limitations
 - Content protection stops forwarding/saving in supported clients only; it cannot stop screenshots or other copying.
-- Verification prompts are deleted after the auto-delete timer (default 60 s). The flow persists: reopening the link re-sends the same channel's card. Set the timer to Off if you prefer permanent prompts.
+- Verification cards are deleted after 30 minutes (the flow lifetime); reopening the link restarts verification.
+- Telegram only sends `chat_member` updates for channels where the bot is admin; without that, users must press Verify.
 - Admin FSM input state is in memory; a restart cancels a half-finished admin input (nothing durable is lost).
 - Throttling is per-process memory (single worker dyno assumed).
 - Sequential update handling means a very slow Telegram call delays other updates; fine at the stated scale.

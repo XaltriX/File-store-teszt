@@ -57,7 +57,8 @@ class VerificationService:
             ids = [c["_id"] for c in chosen]
             flow = await self.repos.requests.create_flow(user_id, fid, token, ids, self.ttl)
             await self.repos.channels.inc_many(ids, "presented")
-        return await self._advance(flow["_id"])
+        # Auto-verify: users who already joined / already sent a request skip straight through.
+        return await self._verify_loop(flow["_id"], user_id, silent=True)
 
     async def verify(self, flow_id: str, user_id: int) -> Step:
         flow = await self.repos.requests.get_flow(flow_id)
@@ -70,25 +71,12 @@ class VerificationService:
             exp = exp.replace(tzinfo=timezone.utc)
         if exp < datetime.now(timezone.utc):
             return Step("error", key="err_flow_expired")
-        progressed = False
-        while True:  # one press verifies every pending step the user has already satisfied (<= required API calls)
-            step = await self._advance(flow_id)
-            if step.kind != "prompt":
-                return step
-            ch = step.channel
-            outcome = await self._check(ch, user_id, count_failure=not progressed)
-            if outcome != "ok":
-                if progressed:  # moved forward: just show the next card, no error
-                    return step
-                return Step("retry", flow=flow, channel=ch, key=outcome)
-            if await self.repos.requests.mark_done(flow_id, ch["_id"]) and ch["mode"] == "public":
-                await self.repos.channels.inc(ch["_id"], "joins_confirmed")
-                await self.repos.stats.inc("public_confirmed")
-            progressed = True
+        return await self._verify_loop(flow_id, user_id, silent=False)
 
     async def on_join_request(self, chat_id: int, user_id: int, request_ts: int) -> list[Step]:
+        """Any pool channel: a join-request event only exists when the channel needs approval."""
         ch = await self.repos.channels.get(chat_id)
-        if not ch or ch.get("removed") or ch.get("mode") != "request":
+        if not ch or ch.get("removed"):
             return []
         if not await self.repos.requests.record_join_request(chat_id, user_id, request_ts):
             return []  # duplicate event
@@ -97,28 +85,61 @@ class VerificationService:
         steps = []
         for flow in await self.repos.requests.active_for_user_channel(user_id, chat_id):
             if await self.repos.requests.mark_done(flow["_id"], chat_id):
-                steps.append(await self._advance(flow["_id"]))
+                steps.append(await self._verify_loop(flow["_id"], user_id, silent=True))
+        return steps
+
+    async def on_member_joined(self, chat_id: int, user_id: int) -> list[Step]:
+        """chat_member update: user became a member of a pool channel -> advance their flows."""
+        ch = await self.repos.channels.get(chat_id)
+        if not ch or ch.get("removed"):
+            return []
+        steps = []
+        for flow in await self.repos.requests.active_for_user_channel(user_id, chat_id):
+            if await self.repos.requests.mark_done(flow["_id"], chat_id):
+                if ch["mode"] == "public":
+                    await self.repos.channels.inc(chat_id, "joins_confirmed")
+                    await self.repos.stats.inc("public_confirmed")
+                steps.append(await self._verify_loop(flow["_id"], user_id, silent=True))
         return steps
 
     async def reopen(self, flow_id: str) -> None:
         await self.repos.requests.reopen(flow_id, self.ttl)
 
     # ------------------------------------------------------------------ internals
+    async def _verify_loop(self, flow_id: str, user_id: int, silent: bool) -> Step:
+        """Check every pending step the user may already satisfy (<= required API calls).
+        silent=True (link open / events): never returns an error and never counts failed checks."""
+        progressed = False
+        while True:
+            step = await self._advance(flow_id)
+            if step.kind != "prompt":
+                return step
+            ch = step.channel
+            outcome = await self._check(ch, user_id, count_failure=not (silent or progressed))
+            if outcome not in ("ok", "ok_request"):
+                if silent or progressed:
+                    return step
+                return Step("retry", flow=step.flow, channel=ch, key=outcome)
+            if await self.repos.requests.mark_done(flow_id, ch["_id"]) and outcome == "ok" and ch["mode"] == "public":
+                await self.repos.channels.inc(ch["_id"], "joins_confirmed")
+                await self.repos.stats.inc("public_confirmed")
+            progressed = True
+
     async def _check(self, ch: dict, user_id: int, count_failure: bool = True) -> str:
-        """'ok' | 'verify_not_member' | 'verify_request_missing' | 'verify_api_error'"""
+        """'ok' (member) | 'ok_request' (stored join request) | verify_* error key."""
         try:
             member = is_member(await self.bot.get_chat_member(ch["_id"], user_id))
         except TelegramAPIError as exc:
             log.warning("membership lookup failed chat=%s: %s", ch["_id"], type(exc).__name__)
             await self.repos.channels.inc(ch["_id"], "errors")
-            if ch["mode"] == "request" and await self.repos.requests.has_join_request(ch["_id"], user_id):
-                return "ok"  # event already proven; lookup failure must not block it
+            if await self.repos.requests.has_join_request(ch["_id"], user_id):
+                return "ok_request"  # event already proven; lookup failure must not block it
             return "verify_api_error"
         if member:
             return "ok"
+        if await self.repos.requests.has_join_request(ch["_id"], user_id):
+            return "ok_request"
         if ch["mode"] == "request":
-            if await self.repos.requests.has_join_request(ch["_id"], user_id):
-                return "ok"
             return "verify_request_missing"
         if count_failure:
             await self.repos.channels.inc(ch["_id"], "failed_checks")

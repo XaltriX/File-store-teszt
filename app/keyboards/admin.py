@@ -1,5 +1,7 @@
 from aiogram.types import InlineKeyboardButton as B, InlineKeyboardMarkup as M
 
+from app.utils.fancy import bold
+
 from app.keyboards.pagination import pager_row
 
 
@@ -9,7 +11,7 @@ def kb(*rows) -> M:
 
 def btn(text: str, data: str) -> B:
     assert len(data.encode()) <= 64, data
-    return B(text=text, callback_data=data)
+    return B(text=bold(text), callback_data=data)
 
 
 BACK_HOME = btn("↩️ Back", "a:home")
@@ -25,7 +27,7 @@ def files_menu() -> M:
     return kb([btn("➕ Add File", "a:f:add"), btn("📦 Batch Add", "a:f:batch")],
               [btn("🔗 Generate Links", "a:f:gen:0"), btn("📋 Stored Files", "a:f:list:0")],
               [btn("🔍 Search Files", "a:f:search"), btn("📥 Import", "a:f:imp")],
-              [btn("🔒 Content Protection", "a:f:prot")], [BACK_HOME])
+              [btn("🗄 DB Channel", "a:f:db"), btn("🔒 Content Protection", "a:f:prot")], [BACK_HOME])
 
 
 def cancel(to: str = "a:home") -> M:

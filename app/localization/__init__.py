@@ -6,10 +6,10 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 LANGUAGES: dict[str, str] = {
-    "en": "English", "hi": "हिन्दी", "bn": "বাংলা", "es": "Español",
-    "ar": "العربية", "pt": "Português", "zh": "简体中文",
+    "en": "English", "hi": "हिन्दी", "bn": "বাংলা", "mr": "मराठी",
+    "te": "తెలుగు", "ta": "தமிழ்", "gu": "ગુજરાતી",
 }
-RTL = {"ar"}
+RTL: set[str] = set()  # none of the shipped languages is RTL; add codes here if one is added
 _RLM = "\u200f"
 
 

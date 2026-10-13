@@ -2,14 +2,18 @@ from __future__ import annotations
 import logging
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramAPIError
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton as B, Message
 
+from app.handlers.admin.channel_management import parse_reference
 from app.handlers.admin.common import drop, edit_panel, page_of, show, temp
 from app.keyboards.admin import btn, cancel, confirm, files_menu, kb
 from app.keyboards.pagination import pager_row
 from app.services.file_service import extract_file_info
 from app.states.file_upload import FileUpload
+from app.utils.fancy import bold
 from app.utils.formatting import chunk_text, esc, human_size, share_url
 
 log = logging.getLogger(__name__)
@@ -55,7 +59,7 @@ async def got_single(m: Message, state: FSMContext, ctx, t) -> None:
     url = ctx.links.deep_link(link["token"])
     text = t("a_file_saved" if created else "a_file_duplicate", name=esc(_fname(file)), size=human_size(file.get("size")),
              ftype=file["type"], url=url)
-    markup = kb([B(text="↗ Share", url=share_url(url))],
+    markup = kb([B(text=bold("↗ Share"), url=share_url(url))],
                 [btn("➕ Add another", "a:f:add"), btn("📂 File", f"a:f:view:{file['_id']}")],
                 [btn("↩️ Files", "a:f")])
     await state.clear()
@@ -226,7 +230,7 @@ async def render_detail(cb, ctx, t, fid: str) -> None:
     rows = [[btn("🔗 New link", f"a:f:nl:{fid}"), btn(f"🔒 Protect: {PROT_LABEL[f.get('protect')]}", f"a:f:pf:{fid}")]]
     active = [l for l in links if l["status"] == "active"]
     if active:
-        rows.append([B(text="↗ Share", url=share_url(ctx.links.deep_link(active[0]["token"])))])
+        rows.append([B(text=bold("↗ Share"), url=share_url(ctx.links.deep_link(active[0]["token"])))])
     for i, l in enumerate(active, 1):
         rows.append([btn(f"🚫 Revoke link #{i}", f"a:f:lr:{l['token']}")])
     rows.append([btn("🗄 Archive", f"a:f:arch:{fid}"), btn("🗑 Delete", f"a:f:del:{fid}")])
@@ -324,3 +328,88 @@ async def protection(cb: CallbackQuery, ctx, t) -> None:
     await show(cb, t("a_protection", state=state_txt),
                kb([btn(f"🔐 Default: {state_txt} (tap to toggle)", "a:f:protg")], [btn("↩️ Files", "a:f")]))
     await cb.answer()
+
+
+# ------------------------------------------------------------------ direct save: admin just sends a file
+@router.message(StateFilter(None))
+async def direct_save(m: Message, ctx, t) -> None:
+    res = await ctx.files.ingest(m)
+    if res is None:
+        return  # not a file: nothing to do
+    file, link, created = res
+    url = ctx.links.deep_link(link["token"])
+    text = t("a_file_saved" if created else "a_file_duplicate", name=esc(_fname(file)),
+             size=human_size(file.get("size")), ftype=file["type"], url=url)
+    await m.answer(text, reply_markup=kb([B(text=bold("↗ Share"), url=share_url(url))],
+                                         [btn("📂 File", f"a:f:view:{file['_id']}"), btn("↩️ Files", "a:f")]))
+
+
+# ------------------------------------------------------------------ DB channel
+async def _db_screen(cb: CallbackQuery, ctx, t) -> None:
+    s = await ctx.repos.settings.get()
+    db = s.get("db_channel")
+    rows = [[btn("✏️ Set / change", "a:f:dbset"),
+             btn(f"💬 Reply: {'ON' if s['db_reply'] else 'OFF'}", "a:f:dbr")]]
+    if db:
+        rows.append([btn("🗑 Remove", "a:f:dbx")])
+    rows.append([btn("↩️ Files", "a:f")])
+    await show(cb, t("a_dbch_menu", current=esc(db["title"]) if db else "not set",
+                     reply="ON" if s["db_reply"] else "OFF"), kb(*rows))
+
+
+@router.callback_query(F.data == "a:f:db")
+async def db_menu(cb: CallbackQuery, state: FSMContext, ctx, t) -> None:
+    await state.clear()
+    await _db_screen(cb, ctx, t)
+    await cb.answer()
+
+
+@router.callback_query(F.data == "a:f:dbr")
+async def db_toggle_reply(cb: CallbackQuery, ctx, t) -> None:
+    s = await ctx.repos.settings.get()
+    await ctx.repos.settings.update(db_reply=not s["db_reply"])
+    await _db_screen(cb, ctx, t)
+    await cb.answer()
+
+
+@router.callback_query(F.data == "a:f:dbx")
+async def db_remove(cb: CallbackQuery, ctx, t) -> None:
+    await ctx.repos.settings.update(db_channel=None)
+    await _db_screen(cb, ctx, t)
+    await cb.answer()
+
+
+@router.callback_query(F.data == "a:f:dbset")
+async def db_set_prompt(cb: CallbackQuery, state: FSMContext, t) -> None:
+    await state.set_state(FileUpload.dbch)
+    await state.update_data(**_panel(cb))
+    await show(cb, t("a_dbch_set"), cancel("a:f:db"))
+    await cb.answer()
+
+
+@router.message(FileUpload.dbch)
+async def db_set_value(m: Message, state: FSMContext, ctx, t) -> None:
+    d = await state.get_data()
+    ref = await parse_reference(m)
+    await drop(m)
+    if ref is None:
+        await temp(ctx, m.chat.id, t("a_channel_bad_ref"))
+        return
+    try:
+        chat = await ctx.bot.get_chat(ref)
+        me = await ctx.bot.get_chat_member(chat.id, ctx.bot_id)
+    except TelegramAPIError:
+        await temp(ctx, m.chat.id, t("a_channel_inaccessible"))
+        return
+    if chat.type != "channel":
+        await temp(ctx, m.chat.id, t("a_dbch_not_channel"))
+        return
+    status = getattr(getattr(me, "status", None), "value", getattr(me, "status", None))
+    if status not in ("administrator", "creator"):
+        await temp(ctx, m.chat.id, t("a_channel_not_admin"))
+        return
+    title = chat.title or str(chat.id)
+    await ctx.repos.settings.update(db_channel={"id": chat.id, "title": title, "admin": m.from_user.id})
+    await state.clear()
+    await edit_panel(ctx.bot, d["pc"], d["pm"], t("a_dbch_set_ok", title=esc(title)),
+                     kb([btn("🗄 DB Channel", "a:f:db")], [btn("↩️ Files", "a:f")]))
