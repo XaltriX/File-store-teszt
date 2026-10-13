@@ -34,12 +34,12 @@ def load_config(env: dict | None = None) -> Config:
     token = (e.get("BOT_TOKEN") or "").strip()
     if not token or ":" not in token or not token.split(":", 1)[0].isdigit():
         errors.append("BOT_TOKEN missing or malformed")
-    mongo = (e.get("MONGO_URL") or "mongodb+srv://kgf97781_db_user:tPJgPDzG75xrEHJR@cluster0.awbenpu.mongodb.net/?appName=Cluster0").strip()
+    mongo = (e.get("MONGO_URL") or "").strip()
     if not mongo.startswith(("mongodb://", "mongodb+srv://")):
         errors.append("MONGO_URL missing or not a mongodb:// URI")
     raw_admins = e.get("ADMIN_IDS") or e.get("OWNER_ID") or ""
     admins: set[int] = set()
-    for part in raw_admins.replace("5706788169", ",").split("5706788169"):
+    for part in raw_admins.replace(";", ",").split(","):
         part = part.strip()
         if not part:
             continue
