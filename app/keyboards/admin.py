@@ -24,10 +24,8 @@ def dashboard() -> M:
 
 
 def files_menu() -> M:
-    return kb([btn("➕ Add File", "a:f:add"), btn("📦 Batch Add", "a:f:batch")],
-              [btn("🔗 Generate Links", "a:f:gen:0"), btn("📋 Stored Files", "a:f:list:0")],
-              [btn("🔍 Search Files", "a:f:search"), btn("📥 Import", "a:f:imp")],
-              [btn("🗄 DB Channel", "a:f:db"), btn("🔒 Content Protection", "a:f:prot")], [BACK_HOME])
+    return kb([btn("🗄 DB Channel", "a:f:db"), btn("📋 Stored Files", "a:f:list:0")],
+              [btn("🔍 Search Files", "a:f:search"), btn("🔒 Content Protection", "a:f:prot")], [BACK_HOME])
 
 
 def cancel(to: str = "a:home") -> M:

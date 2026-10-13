@@ -16,7 +16,7 @@ Stack: Python 3.12, aiogram 3.13 (Bot API, no `API_ID`/`API_HASH`), PyMongo asyn
 | Flows | Persisted in `flows`. Channels are chosen once (least-presented, random tie-break, distinct) and never re-rolled on Verify. `presented` is incremented atomically at assignment. |
 | Auto-verify | On link open the bot first checks every assigned channel: users who already joined (or already sent a join request) skip the card. While waiting, `chat_member` updates (public/any channel) and `chat_join_request` updates advance the flow and deliver the file automatically, with no button press. Requires the bot to be **admin** in each channel. |
 | DB channel | Files → DB Channel: set a channel (bot = admin). Every file posted there is saved and its link is DM'd to the admin who set it, plus optionally replied inside the channel (needs "Post messages"). Admins can also just send a file to the bot (no button) to get a link. |
-| Welcome media | Photo, video or GIF (50 MB bot limit; 3-8 s loops work best). Preview before apply. |
+| Welcome media | Photo, video or GIF (50 MB bot limit; 3-8 s loops work best). Saved immediately, preview shown after (no pending "Apply" step). |
 | Bold buttons | Telegram buttons can't carry HTML, so Latin letters/digits use Unicode bold glyphs. Indic scripts have no bold glyphs and stay normal. |
 | Public channel | Step completes only when `getChatMember` says member/admin/creator. API errors never complete a step. |
 | Private channel | Step completes only after a `chat_join_request` event (deduplicated by chat+user+request time). Requests are **never approved/declined** and are counted separately from joins. |
@@ -25,6 +25,7 @@ Stack: Python 3.12, aiogram 3.13 (Bot API, no `API_ID`/`API_HASH`), PyMongo asyn
 | Repeat access | Completed flows are kept 30 days; opening the same link again delivers without re-verifying. After that, verification restarts. |
 | Auto-delete | One persisted queue (`pending_deletes`) + one worker. Status/error messages use the admin timer (default 60 s, 0 = off). Verification cards live for the whole 30-min flow and are removed on delivery. Delivered files are never auto-deleted. Survives restarts. |
 | Broadcasts | `copy_message` of the admin's message. Job doc holds counters + cursor; per-recipient outcome is one small doc in `broadcast_deliveries` (unique `(bid, uid)`), so resume never re-sends. 20 msgs/s batches, bounded retries with backoff+jitter, blocked users marked and skipped, graceful shutdown marks the job `interrupted` and it resumes on next start. |
+| Admin panel | Admins see a **🛠 Admin Panel** button under the `/start` welcome card (`/admin` still works). Authorization is checked server-side on every admin callback. |
 | Admin auth | `AdminAuthMiddleware` on the admin router checks `ADMIN_IDS` on every message and callback. Forged `a:*` callbacks from non-admins are rejected. |
 | FSM | Admin input flows use in-memory FSM storage (short-lived by design). Everything durable is in MongoDB. |
 | Updates | Polled sequentially (`handle_as_tasks=False`) so batch uploads keep order. Fine for <1,000 files/day. |
@@ -37,7 +38,7 @@ Stack: Python 3.12, aiogram 3.13 (Bot API, no `API_ID`/`API_HASH`), PyMongo asyn
 - Deep-link users with no saved language skip the language prompt (language is guessed from Telegram's `language_code` and saved), so a file is never blocked behind a menu. `/start` without a payload asks for the language once.
 - Welcome/About custom text is plain text (escaped); first line becomes the bold title; `{first_name}` is supported. One custom text applies to all languages (the built-in default is translated).
 - Admin operational labels (button captions, admin panels) are English; all user-facing text is translated. Admin text strings still live in `en.json` (`a_*` keys).
-- Bot API cannot read channel history: **Import** works by forwarding channel messages to the bot, or by enabling **Watch** on a pool channel (bot must be channel admin); the DB channel is the primary, automatic way so new media posts are imported.
+- Manual Add File / Batch / Generate Links / Import were removed: use the DB channel, or just send a file to the bot.
 - Settings has two extra entries beyond the brief: Official Channels list and About text.
 - `handlers/admin/welcome_editor.py` from the suggested tree is folded into `settings.py` (same router, preview-before-apply flow).
 

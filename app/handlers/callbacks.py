@@ -44,5 +44,5 @@ async def language(cb: CallbackQuery, t, settings: dict) -> None:
 @router.callback_query(F.data == "u:home")
 async def home(cb: CallbackQuery, ctx, lang: str, settings: dict) -> None:
     text = ctx.welcome.render_text(lang, settings, cb.from_user.first_name)
-    await edit_or_send(cb.message, text, ctx.welcome.keyboard(lang, settings))
+    await edit_or_send(cb.message, text, ctx.welcome.keyboard(lang, settings, cb.from_user.id in ctx.cfg.admin_ids))
     await cb.answer()

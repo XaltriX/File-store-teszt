@@ -138,50 +138,20 @@ async def got_value(m: Message, state: FSMContext, ctx, t, lang: str, settings: 
         else:
             value = [{"title": v["title"], "url": v["url"]} for v in value]
     if field in PREVIEWED:
-        merged = {**settings, field: value}
+        # render first so a bad value (e.g. caption too long for media) is never saved
         try:
-            pv = await ctx.welcome.send(m.chat.id, lang, m.from_user.first_name, merged)
-            await state.update_data(pv=pv.message_id)
-            await ctx.lifecycle.schedule(m.chat.id, pv.message_id, 300)
+            pv = await ctx.welcome.send(m.chat.id, lang, m.from_user.first_name, {**settings, field: value})
         except TelegramAPIError:
             await temp(ctx, m.chat.id, t("a_preview_failed"))
             return
-        await state.update_data(value=value)
-        await edit_panel(ctx.bot, d["pc"], d["pm"], t("a_preview_apply"), confirm("a:t:apply", "a:t:cancel", "✅ Apply"))
+        await ctx.lifecycle.schedule(m.chat.id, pv.message_id, 300)
+        await ctx.repos.settings.update(**{field: value})  # saved immediately: nothing pending, /start-safe
+        await state.clear()
+        await edit_panel(ctx.bot, d["pc"], d["pm"], t("a_saved_preview"), kb([btn("↩️ Settings", "a:t")]))
         return
     await ctx.repos.settings.update(**{field: value})
     await state.clear()
     await edit_panel(ctx.bot, d["pc"], d["pm"], t("a_saved"), kb([btn("↩️ Settings", "a:t")]))
-
-
-async def _drop_preview(ctx, cb: CallbackQuery, d: dict) -> None:
-    if d.get("pv"):
-        try:
-            await ctx.bot.delete_message(cb.message.chat.id, d["pv"])
-        except TelegramAPIError:
-            pass
-
-
-@router.callback_query(F.data == "a:t:apply")
-async def apply(cb: CallbackQuery, state: FSMContext, ctx, t) -> None:
-    d = await state.get_data()
-    if "field" not in d or "value" not in d or d["field"] not in PREVIEWED:
-        await cb.answer(t("err_flow_expired"), show_alert=True)
-        return
-    await ctx.repos.settings.update(**{d["field"]: d["value"]})
-    await _drop_preview(ctx, cb, d)
-    await state.clear()
-    await show(cb, t("a_saved"), kb([btn("↩️ Settings", "a:t")]))
-    await cb.answer()
-
-
-@router.callback_query(F.data == "a:t:cancel")
-async def cancel_change(cb: CallbackQuery, state: FSMContext, ctx, t) -> None:
-    d = await state.get_data()
-    await _drop_preview(ctx, cb, d)
-    await state.clear()
-    await show(cb, t("a_settings_menu"), settings_menu())
-    await cb.answer()
 
 
 # ------------------------------------------------------------------ protection / auto-delete

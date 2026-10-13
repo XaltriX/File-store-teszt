@@ -20,4 +20,5 @@ async def choose_language(cb: CallbackQuery, ctx, settings: dict) -> None:
         await cb.message.delete()
     except TelegramAPIError:
         pass
-    await ctx.welcome.send(cb.from_user.id, code, cb.from_user.first_name, settings)
+    await ctx.welcome.send(cb.from_user.id, code, cb.from_user.first_name, settings,
+                           is_admin=cb.from_user.id in ctx.cfg.admin_ids)

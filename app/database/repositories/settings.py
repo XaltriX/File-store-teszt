@@ -16,7 +16,6 @@ DEFAULTS: dict = {
     "default_language": "en",
     "db_channel": None,            # {"id","title","admin"}: files posted there are auto-saved
     "db_reply": True,              # also reply with the link inside the DB channel
-    "import_sources": [],          # chat ids auto-imported from channel_post
 }
 
 

@@ -15,18 +15,17 @@ router = Router(name="channel-import")
 @router.channel_post()
 async def auto_import(post: Message, ctx) -> None:
     """DB channel: every file posted there is saved and its link sent to the admin (and optionally
-    replied in the channel). Watched import sources are saved silently."""
+    replied in the channel)."""
     s = await ctx.repos.settings.get()
     db = s.get("db_channel")
-    is_db = bool(db) and post.chat.id == db["id"]
-    if not (is_db or post.chat.id in s["import_sources"]):
+    if not db or post.chat.id != db["id"]:
         return
     try:
         res = await ctx.files.ingest(post)
     except Exception:  # noqa: BLE001
         log.exception("auto-import failed chat=%s", post.chat.id)
         return
-    if not res or not is_db:
+    if not res:
         return
     file, link, created = res
     url = ctx.links.deep_link(link["token"])

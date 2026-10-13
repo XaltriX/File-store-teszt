@@ -29,12 +29,13 @@ class WelcomeService:
             return "\n".join(lines)
         return self.i18n.t(lang, "welcome", name=name)
 
-    def keyboard(self, lang: str, settings: dict) -> InlineKeyboardMarkup:
-        return welcome_keyboard(lambda k: self.i18n.t(lang, k), settings)
+    def keyboard(self, lang: str, settings: dict, is_admin: bool = False) -> InlineKeyboardMarkup:
+        return welcome_keyboard(lambda k: self.i18n.t(lang, k), settings, is_admin)
 
-    async def send(self, chat_id: int, lang: str, first_name: str | None, settings: dict | None = None):
+    async def send(self, chat_id: int, lang: str, first_name: str | None, settings: dict | None = None,
+                   is_admin: bool = False):
         s = settings or await self.repos.settings.get()
-        text, kb, media = self.render_text(lang, s, first_name), self.keyboard(lang, s), welcome_media(s)
+        text, kb, media = self.render_text(lang, s, first_name), self.keyboard(lang, s, is_admin), welcome_media(s)
         if media:
             method, key = SEND[media["type"]]
             return await getattr(self.bot, method)(chat_id, **{key: media["file_id"]}, caption=text, reply_markup=kb)

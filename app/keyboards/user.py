@@ -15,7 +15,7 @@ def language_keyboard(enabled: list[str]) -> M:
     return M(inline_keyboard=rows)
 
 
-def welcome_keyboard(t, s: dict) -> M:
+def welcome_keyboard(t, s: dict, is_admin: bool = False) -> M:
     rows = []
     mv = s.get("more_videos_url")
     rows.append([B(t("btn_more"), url=mv) if mv else B(t("btn_more"), callback_data="u:nc")])
@@ -25,6 +25,8 @@ def welcome_keyboard(t, s: dict) -> M:
     rows.append([B(t("btn_about"), callback_data="u:about"), B(t("btn_lang"), callback_data="u:lang")])
     for b in s.get("welcome_buttons") or []:
         rows.append([B(b["text"], url=b["url"])])
+    if is_admin:  # visible to admins only; every admin callback is still authorized server-side
+        rows.append([B("🛠 Admin Panel", callback_data="a:home")])
     return M(inline_keyboard=rows)
 
 

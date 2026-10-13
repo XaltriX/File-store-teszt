@@ -25,4 +25,5 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext,
     if user.get("language") is None:
         await message.answer(t("lang_prompt"), reply_markup=language_keyboard(settings["enabled_languages"]))
         return
-    await ctx.welcome.send(message.chat.id, lang, message.from_user.first_name, settings)
+    await ctx.welcome.send(message.chat.id, lang, message.from_user.first_name, settings,
+                           is_admin=message.from_user.id in ctx.cfg.admin_ids)

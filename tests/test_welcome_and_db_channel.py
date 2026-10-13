@@ -1,7 +1,12 @@
 from types import SimpleNamespace as NS
 
 from app.handlers.admin.file_management import direct_save
+from app.handlers.admin.common import show
+from app.handlers.admin.settings import got_value
 from app.handlers.files import auto_import
+from app.handlers.start import cmd_start
+from app.keyboards.admin import files_menu
+from app.keyboards.user import welcome_keyboard
 from app.services.welcome_service import WelcomeService
 
 
@@ -75,12 +80,6 @@ async def test_duplicate_db_post_reuses_file_and_link(env):
     assert await env.repos.files.count() == 1 and await env.repos.links.count_active() == 1
 
 
-async def test_watched_source_imports_silently(env):
-    await env.repos.settings.update(import_sources=[-100500])
-    await auto_import(doc_msg(), ctx_of(env))
-    assert await env.repos.files.count() == 1 and env.bot.sent("send_message") == []
-
-
 # ---- admin sends a file directly
 async def test_admin_direct_file_is_saved_and_link_returned(env):
     sent = []
@@ -100,3 +99,92 @@ async def test_admin_plain_text_is_ignored_by_direct_save(env):
     m.answer = None
     await direct_save(m, ctx_of(env), lambda k, **kw: k)
     assert await env.repos.files.count() == 0
+
+
+# ---- welcome media must survive /start (regression: preview shown once, then gone)
+class FakeState:
+    def __init__(self, data):
+        self.data = dict(data)
+        self.cleared = False
+
+    async def get_data(self): return dict(self.data)
+    async def update_data(self, **kw): self.data.update(kw)
+    async def clear(self): self.cleared, self.data = True, {}
+
+
+async def _noop(*a, **k): return None
+
+
+async def test_welcome_video_is_saved_immediately_and_shown_on_next_start(env):
+    ctx = NS(repos=env.repos, bot=env.bot, welcome=WelcomeService(env.bot, env.repos, env.i18n),
+             lifecycle=NS(schedule=_noop), cfg=NS(admin_ids=frozenset({1})))
+    msg = NS(chat=NS(id=1), from_user=NS(id=1, first_name="Admin"), text=None, photo=None, animation=None,
+             video=NS(file_id="VID1"), delete=_noop)
+    state = FakeState({"field": "welcome_media", "pc": 1, "pm": 2})
+    t = lambda k, **kw: env.i18n.t("en", k, **kw)  # noqa: E731
+    await got_value(msg, state, ctx, t, "en", await env.repos.settings.get())
+    assert (await env.repos.settings.get())["welcome_media"] == {"type": "video", "file_id": "VID1"}
+    assert state.cleared  # nothing left pending, so a /start can't lose it
+    env.bot.calls.clear()
+
+    start_msg = NS(chat=NS(id=5), from_user=NS(id=5, first_name="Ann", language_code="en"))
+    s = await env.repos.settings.get()
+    await cmd_start(start_msg, NS(args=None), FakeState({}), ctx, {"language": "en"}, "en", t, s)
+    name, kw = env.bot.calls[0]
+    assert name == "send_video" and kw["video"] == "VID1" and "Ann" in kw["caption"]
+
+
+async def test_bad_media_value_is_not_saved_when_preview_fails(env):
+    from aiogram.exceptions import TelegramBadRequest
+    env.bot.raise_on["send_video"] = TelegramBadRequest("caption too long")
+    ctx = NS(repos=env.repos, bot=env.bot, welcome=WelcomeService(env.bot, env.repos, env.i18n),
+             lifecycle=NS(schedule=_noop), cfg=NS(admin_ids=frozenset({1})))
+    msg = NS(chat=NS(id=1), from_user=NS(id=1, first_name="A"), text=None, photo=None, animation=None,
+             video=NS(file_id="V"), delete=_noop)
+    state = FakeState({"field": "welcome_media", "pc": 1, "pm": 2})
+    await got_value(msg, state, ctx, lambda k, **kw: k, "en", await env.repos.settings.get())
+    assert (await env.repos.settings.get())["welcome_media"] is None
+
+
+# ---- admin panel button on /start, menu cleanup
+def _texts(markup):
+    return [b.text for r in markup.inline_keyboard for b in r]
+
+
+def test_admin_panel_button_only_for_admins():
+    t = lambda k: k  # noqa: E731
+    s = {"welcome_buttons": []}
+    admin = welcome_keyboard(t, s, True).inline_keyboard[-1][0]
+    assert admin.callback_data == "a:home"
+    assert all(b.callback_data != "a:home" for r in welcome_keyboard(t, s, False).inline_keyboard for b in r)
+
+
+async def test_start_for_admin_includes_panel_button_and_user_does_not(env):
+    ctx = NS(repos=env.repos, bot=env.bot, welcome=WelcomeService(env.bot, env.repos, env.i18n),
+             cfg=NS(admin_ids=frozenset({1})), verification=None)
+    t = lambda k, **kw: env.i18n.t("en", k, **kw)  # noqa: E731
+    s = await env.repos.settings.get()
+    for uid, expect in ((1, True), (2, False)):
+        env.bot.calls.clear()
+        m = NS(chat=NS(id=uid), from_user=NS(id=uid, first_name="X", language_code="en"))
+        await cmd_start(m, NS(args=None), FakeState({}), ctx, {"language": "en"}, "en", t, s)
+        kb = env.bot.calls[0][1]["reply_markup"]
+        assert any(b.callback_data == "a:home" for r in kb.inline_keyboard for b in r) is expect
+
+
+def test_files_menu_no_longer_has_manual_add_buttons():
+    data = [b.callback_data for r in files_menu().inline_keyboard for b in r]
+    assert not any(d.startswith(("a:f:add", "a:f:batch", "a:f:gen", "a:f:imp")) for d in data)
+    assert "a:f:db" in data and "a:f:list:0" in data
+
+
+async def test_admin_panel_replaces_a_media_message_instead_of_captioning_it():
+    calls = []
+
+    class Media:
+        text = None
+        async def delete(self): calls.append("delete")
+        async def answer(self, text, **k): calls.append("answer")
+        async def edit_caption(self, **k): calls.append("caption")
+    await show(Media(), "panel")
+    assert calls == ["delete", "answer"]

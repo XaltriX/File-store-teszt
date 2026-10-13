@@ -13,10 +13,14 @@ async def show(target: CallbackQuery | Message, text: str, kb=None) -> None:
     """Edit the persistent panel message in place; send a new one only if editing is impossible."""
     msg = target.message if isinstance(target, CallbackQuery) else target
     try:
-        if msg.text is not None:
-            await msg.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
-        else:
-            await msg.edit_caption(caption=text, reply_markup=kb)
+        if msg.text is None:  # media message (e.g. the welcome video): replace it, don't leave a panel under media
+            try:
+                await msg.delete()
+            except TelegramAPIError:
+                pass
+            await msg.answer(text, reply_markup=kb, disable_web_page_preview=True)
+            return
+        await msg.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
     except TelegramBadRequest as e:
         if is_not_modified(e):
             return
