@@ -96,7 +96,7 @@ def delivery(env, with_lifecycle=True):
 
 
 async def test_delivery_copies_from_db_channel_and_falls_back_to_file_id(env):
-    f, link = await make_file(env)
+    f, link = await make_file(env, duration=60)       # length known -> deliver from the DB copy
     f["store"] = {"chat_id": -100777, "message_id": 42}
     d = delivery(env, False)
     assert await d.deliver(7, "en", f, link) is None
@@ -110,7 +110,7 @@ async def test_delivery_copies_from_db_channel_and_falls_back_to_file_id(env):
 
 
 async def test_blocked_user_is_not_retried_via_fallback(env):
-    f, link = await make_file(env)
+    f, link = await make_file(env, duration=60)
     f["store"] = {"chat_id": -1, "message_id": 1}
     env.bot.raise_on["copy_message"] = TelegramForbiddenError("bot was blocked by the user")
     assert await delivery(env, False).deliver(7, "en", f, link) == "err_delivery"

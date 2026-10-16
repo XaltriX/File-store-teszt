@@ -34,7 +34,7 @@ def test_welcome_keyboard_uses_real_url_buttons_only_when_configured():
 
 
 def test_verify_keyboard_join_label_matches_action():
-    pub = verify_keyboard(lambda k: k, {"mode": "public", "url": "https://t.me/x"}, "f1")
-    req = verify_keyboard(lambda k: k, {"mode": "request", "url": "https://t.me/+abc"}, "f1")
+    pub = verify_keyboard(lambda k: k, {"channel_ids": [1]}, [{"_id": 1, "mode": "public", "url": "https://t.me/x"}], "f1")
+    req = verify_keyboard(lambda k: k, {"channel_ids": [1]}, [{"_id": 1, "mode": "request", "url": "https://t.me/+abc"}], "f1")
     assert all_buttons(pub)[0].text == bold("btn_join") and all_buttons(req)[0].text == bold("btn_request")
     assert all_buttons(pub)[1].callback_data == "v:f1"

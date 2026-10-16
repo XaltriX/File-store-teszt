@@ -36,10 +36,22 @@ def back_keyboard(t) -> M:
     return M(inline_keyboard=[[B(t("btn_back"), callback_data="u:home")]])
 
 
-def verify_keyboard(t, channel: dict, flow_id: str) -> M:
-    join_key = "btn_request" if channel["mode"] == "request" else "btn_join"
-    return M(inline_keyboard=[[B(t(join_key), url=channel["url"])],
-                              [B(t("btn_verify"), callback_data=f"v:{flow_id}")]])
+def verify_keyboard(t, flow: dict, pending: list[dict], flow_id: str) -> M:
+    """One button per channel, in the order of the flow. Finished channels show '✅ Joined'."""
+    ids = flow["channel_ids"]
+    total = len(ids)
+    by_id = {c["_id"]: c for c in pending}
+    rows = []
+    for i, cid in enumerate(ids, 1):
+        n = f" {i}" if total > 1 else ""
+        ch = by_id.get(cid)
+        if ch is None:
+            rows.append([B(f'{t("btn_joined")}{n}', callback_data="u:noop")])
+        else:
+            key = "btn_request" if ch["mode"] == "request" else "btn_join"
+            rows.append([B(f"{t(key)}{n}", url=ch["url"])])
+    rows.append([B(t("btn_verify"), callback_data=f"v:{flow_id}")])
+    return M(inline_keyboard=rows)
 
 
 def retry_keyboard(t, flow_id: str) -> M:

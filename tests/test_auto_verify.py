@@ -78,4 +78,4 @@ async def test_partially_satisfied_flow_shows_only_the_remaining_card(env):
     env.bot.members.pop((-1002, U))
     step = await env.verification.start(U, link["token"])
     assert step.kind == "prompt" and step.channel["_id"] == -1002
-    assert len((await env.repos.requests.get_flow(step.flow["_id"]))["done"]) == 1
+    assert step.flow["channel_ids"] == [-1002]       # only the channel the user is NOT in is asked for

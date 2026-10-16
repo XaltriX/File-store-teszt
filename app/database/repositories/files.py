@@ -70,6 +70,10 @@ class FilesRepo:
         await self.col.update_one({"_id": fid}, {"$set": {"protect": value}})
         self.version += 1
 
+    async def set_duration(self, fid: str, seconds: int | None) -> None:
+        await self.col.update_one({"_id": fid}, {"$set": {"duration": seconds}})
+        self.version += 1
+
     async def set_status(self, fid: str, status: str) -> None:
         await self.col.update_one({"_id": fid}, {"$set": {"status": status}})
         self.version += 1

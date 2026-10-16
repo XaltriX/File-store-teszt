@@ -2,7 +2,7 @@ from __future__ import annotations
 import logging
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton as B, Message
@@ -11,7 +11,10 @@ from app.handlers.admin.channel_management import parse_reference
 from app.handlers.admin.common import drop, edit_panel, page_of, show, temp
 from app.keyboards.admin import btn, cancel, confirm, files_menu, kb
 from app.keyboards.pagination import pager_row
+from app.states.broadcast import BroadcastFlow
+from app.states.channel_setup import ChannelSetup
 from app.states.file_upload import FileUpload
+from app.states.welcome_editor import SettingsInput
 from app.services.file_service import extract_file_info
 from app.utils.fancy import bold
 from app.utils.formatting import chunk_text, esc, human_size, share_url
@@ -90,17 +93,40 @@ async def search_page(cb: CallbackQuery, state: FSMContext, ctx, t) -> None:
 PROT_LABEL = {None: "Default", True: "ON", False: "OFF"}
 
 
+def fmt_len(sec: int | None) -> str:
+    if not sec:
+        return "unknown"
+    h, rem = divmod(int(sec), 3600)
+    m, s_ = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s_:02d}" if h else f"{m}:{s_:02d}"
+
+
+def parse_length(text: str) -> int | None:
+    """'150' | '2:30' | '1:02:30' -> seconds (1..86400) or None."""
+    parts = text.strip().split(":")
+    if not 1 <= len(parts) <= 3 or not all(p.strip().isdigit() for p in parts):
+        return None
+    total = 0
+    for p in parts:
+        total = total * 60 + int(p)
+    return total if 1 <= total <= 86400 else None
+
+
 async def render_detail(cb, ctx, t, fid: str) -> None:
     f = await ctx.repos.files.get(fid)
     if not f:
         await cb.answer(t("err_unavailable"), show_alert=True)
         return
     links = await ctx.repos.links.for_file(fid)
+    cfg = (await ctx.repos.settings.get())["file_autodelete_seconds"]
+    delay = ctx.delivery.cleanup_delay(cfg, f)
+    autodel = f"{fmt_len(delay)} min" if delay else "off"
     lines = [f"{'🟢' if l['status'] == 'active' else '🚫'} <code>{ctx.links.deep_link(l['token'])}</code>" for l in links]
     text = t("a_file_detail", name=esc(_fname(f)), ftype=f["type"], size=human_size(f.get("size")),
-             mime=esc(f.get("mime") or "-"), status=f["status"], prot=PROT_LABEL[f.get("protect")],
+             mime=esc(f.get("mime") or "-"), length=fmt_len(f.get("duration")), autodel=autodel, status=f["status"], prot=PROT_LABEL[f.get("protect")],
              created=f["created_at"].strftime("%Y-%m-%d %H:%M"), links="\n".join(lines) or "-")
-    rows = [[btn("🔗 New link", f"a:f:nl:{fid}"), btn(f"🔒 Protect: {PROT_LABEL[f.get('protect')]}", f"a:f:pf:{fid}")]]
+    rows = [[btn("🔗 New link", f"a:f:nl:{fid}"), btn(f"🔒 Protect: {PROT_LABEL[f.get('protect')]}", f"a:f:pf:{fid}")],
+            [btn("⏱ Set length", f"a:f:dur:{fid}")]]
     active = [l for l in links if l["status"] == "active"]
     if active:
         rows.append([B(text=bold("↗ Share"), url=share_url(ctx.links.deep_link(active[0]["token"])))])
@@ -194,28 +220,50 @@ async def protection(cb: CallbackQuery, ctx, t) -> None:
 
 
 # ------------------------------------------------------------------ direct save: admin just sends a file
-@router.message(StateFilter(None))
+# States that legitimately expect a media/forwarded message themselves; in every other state a file the admin
+# sends is saved (a leftover menu state must never swallow it silently).
+EXPECTING_MEDIA = {BroadcastFlow.message.state, SettingsInput.value.state, ChannelSetup.reference.state,
+                   ChannelSetup.invite.state, FileUpload.dbch.state}
+
+
+async def is_file_to_save(m: Message, state: FSMContext) -> bool:
+    return extract_file_info(m) is not None and (await state.get_state()) not in EXPECTING_MEDIA
+
+
+def db_failure_key(exc: Exception) -> str:
+    text = str(exc).lower()
+    if isinstance(exc, TelegramForbiddenError) or any(x in text for x in ("not enough rights", "no rights", "administrator rights")):
+        return "a_db_fail_rights"
+    if "chat not found" in text or "chat_id is empty" in text:
+        return "a_db_fail_chat"
+    return "a_db_fail"
+
+
+@router.message(is_file_to_save)
 async def direct_save(m: Message, ctx, t) -> None:
     info = extract_file_info(m)
     if info is None:
         return  # not a file: nothing to do
-    store = None
+    store, db_key = None, "a_db_none"
     db = (await ctx.repos.settings.get()).get("db_channel")
     existing = await ctx.repos.files.get_by_unique(info["file_unique_id"])
-    if db and not (existing and existing.get("store")):
+    if existing and existing.get("store"):
+        db_key = "a_db_already"
+    elif db:
         try:  # keep a durable copy in the DB channel and deliver from it later
             copied = await ctx.bot.copy_message(db["id"], m.chat.id, m.message_id)
             store = {"chat_id": db["id"], "message_id": copied.message_id}
+            db_key = "a_db_ok"
         except TelegramAPIError as e:
-            log.warning("copy to DB channel failed: %s", type(e).__name__)
-            await temp(ctx, m.chat.id, t("a_dbch_copy_failed"))
+            log.warning("copy to DB channel failed: %s", e)
+            db_key = db_failure_key(e)
     res = await ctx.files.ingest(m, store=store)
     if res is None:
         return
     file, link, created = res
     url = ctx.links.deep_link(link["token"])
     text = t("a_file_saved" if created else "a_file_duplicate", name=esc(_fname(file)),
-             size=human_size(file.get("size")), ftype=file["type"], url=url)
+             size=human_size(file.get("size")), ftype=file["type"], url=url, db=t(db_key))
     await m.answer(text, reply_markup=kb([B(text=bold("↗ Share"), url=share_url(url))],
                                          [btn("📂 File", f"a:f:view:{file['_id']}"), btn("↩️ Files", "a:f")]))
 
@@ -287,5 +335,32 @@ async def db_set_value(m: Message, state: FSMContext, ctx, t) -> None:
     title = chat.title or str(chat.id)
     await ctx.repos.settings.update(db_channel={"id": chat.id, "title": title, "admin": m.from_user.id})
     await state.clear()
-    await edit_panel(ctx.bot, d["pc"], d["pm"], t("a_dbch_set_ok", title=esc(title)),
+    warn = "\n\n" + t("a_dbch_no_post") if getattr(me, "can_post_messages", None) is False else ""
+    await edit_panel(ctx.bot, d["pc"], d["pm"], t("a_dbch_set_ok", title=esc(title)) + warn,
                      kb([btn("🗄 DB Channel", "a:f:db")], [btn("↩️ Files", "a:f")]))
+
+
+# ------------------------------------------------------------------ manual length (documents have none)
+@router.callback_query(F.data.startswith("a:f:dur:"))
+async def length_prompt(cb: CallbackQuery, state: FSMContext, t) -> None:
+    fid = cb.data.split(":")[-1]
+    await state.set_state(FileUpload.duration)
+    await state.update_data(**_panel(cb), fid=fid)
+    await show(cb, t("a_dur_prompt"), cancel(f"a:f:view:{fid}"))
+    await cb.answer()
+
+
+@router.message(FileUpload.duration, F.text)
+async def length_value(m: Message, state: FSMContext, ctx, t) -> None:
+    d = await state.get_data()
+    sec = parse_length(m.text)
+    await drop(m)
+    if sec is None:
+        await temp(ctx, m.chat.id, t("a_dur_bad"))
+        return
+    await ctx.repos.files.set_duration(d["fid"], sec)
+    await state.clear()
+    f = await ctx.repos.files.get(d["fid"])
+    delay = ctx.delivery.cleanup_delay((await ctx.repos.settings.get())["file_autodelete_seconds"], f or {"duration": sec})
+    await edit_panel(ctx.bot, d["pc"], d["pm"], t("a_dur_saved", length=fmt_len(sec), delete=fmt_len(delay) + " min" if delay else "off"),
+                     kb([btn("📂 File", f"a:f:view:{d['fid']}")], [btn("↩️ Files", "a:f")]))

@@ -32,7 +32,7 @@ async def auto_import(post: Message, ctx) -> None:
     t = lambda k, **kw: ctx.i18n.t("en", k, **kw)  # noqa: E731
     name = file.get("name") or f"{file['type']}-{file['_id'][:6]}"
     text = t("a_file_saved" if created else "a_file_duplicate", name=esc(name), size=human_size(file.get("size")),
-             ftype=file["type"], url=url)
+             ftype=file["type"], url=url, db=t("a_db_ok"))
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=bold("↗ Share"), url=share_url(url))]])
     recipients = {db["admin"]} if db.get("admin") else set(ctx.cfg.admin_ids)
     for admin in recipients:

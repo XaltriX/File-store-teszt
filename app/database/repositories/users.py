@@ -62,16 +62,16 @@ class UsersRepo:
             self._remember(doc)
         return doc
 
-    async def set_fsub(self, uid: int, channel_ids: list[int]) -> None:
-        """Remember which channels the user last satisfied (returning users skip flows entirely)."""
-        if uid in self._cache:
-            self._cache[uid][1]["fsub_ids"] = list(channel_ids)
-        await self.w.set(self.col, uid, {"fsub_ids": list(channel_ids)}, upsert=True)
-
     async def set_language(self, uid: int, lang: str) -> None:
         await self.col.update_one({"_id": uid}, {"$set": {"language": lang, "lang_chosen": True}})
         if uid in self._cache:
             self._cache[uid][1].update(language=lang, lang_chosen=True)
+
+    async def reset_language(self, uid: int) -> None:
+        """Back to 'never chose': the language screen is shown again (handy for testing)."""
+        await self.col.update_one({"_id": uid}, {"$set": {"language": None, "lang_chosen": False}})
+        if uid in self._cache:
+            self._cache[uid][1].update(language=None, lang_chosen=False)
 
     async def mark_blocked(self, uid: int, blocked: bool = True) -> None:
         await self.col.update_one({"_id": uid}, {"$set": {"blocked": blocked}})

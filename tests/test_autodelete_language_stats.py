@@ -125,22 +125,22 @@ async def req_channel(env):
 
 async def counts(env):
     c = await env.repos.channels.get(-1001)
-    return c["requests_received"], c["requests_repeat"], c["requests_other"], (await env.repos.stats.totals())["private_requests"]
+    return c["requests_received"], c["requests_other"], (await env.repos.stats.totals())["private_requests"]
 
 
-async def test_each_user_counts_once_even_if_they_request_several_times(env):
+async def test_every_distinct_request_through_our_link_counts_once_like_the_links_own_counter(env):
     v = await req_channel(env)
-    for ts in (1, 2, 3):                       # same user cancels and re-requests
+    for ts in (1, 2, 3):                       # same user cancels and re-requests: three real requests
         await v.on_join_request(-1001, 7, ts, OURS)
     await v.on_join_request(-1001, 8, 1, OURS)
-    assert await counts(env) == (2, 2, 0, 2)   # 2 unique users, 2 repeats
+    assert await counts(env) == (4, 0, 4)
 
 
 async def test_redelivered_event_is_not_counted_at_all(env):
     v = await req_channel(env)
     await v.on_join_request(-1001, 7, 1, OURS)
     await v.on_join_request(-1001, 7, 1, OURS)
-    assert await counts(env) == (1, 0, 0, 1)
+    assert await counts(env) == (1, 0, 1)
 
 
 async def test_requests_through_other_or_old_links_are_separated_from_ours(env):
@@ -149,13 +149,82 @@ async def test_requests_through_other_or_old_links_are_separated_from_ours(env):
     await v.on_join_request(-1001, 2, 1, "https://t.me/+zzzOTHER")
     await v.on_join_request(-1001, 3, 1, "https://t.me/+ab…")          # Telegram-shortened form of a link that starts like ours
     await v.on_join_request(-1001, 4, 1, None)                         # public username join: no link, counts as ours
-    assert await counts(env) == (3, 0, 1, 3)
+    assert await counts(env) == (3, 1, 3)
 
 
-async def test_stats_still_complete_the_users_flow(env):
+async def test_other_link_request_still_unlocks_the_users_file(env):
     v = await req_channel(env)
     f, link = await make_file(env)
     await v.start(7, link["token"])
-    steps = await v.on_join_request(-1001, 7, 1, "https://t.me/+other")  # other link: not counted, still unlocks
+    steps = await v.on_join_request(-1001, 7, 1, "https://t.me/+other")
     assert [s.kind for s in steps] == ["deliver"]
-    assert await counts(env) == (0, 0, 1, 0)
+    assert await counts(env) == (0, 1, 0)
+
+
+# ------------------------------------------------------------ simple per-channel stats: today + total
+async def test_channel_today_and_total_joins_leaves_and_requests(env):
+    await make_channel(env, -1001, "public")
+    v = env.verification
+    for uid in (1, 2, 3):
+        await v.record_membership_change(-1001, uid, joined=True)
+    await v.record_membership_change(-1001, 2, joined=False)
+    await v.record_membership_change(-1001, 99, joined=True, is_bot=True)         # bots are never counted
+    await v.record_membership_change(-5, 1, joined=True)                          # not a pool channel
+    c = await env.repos.channels.get(-1001)
+    day = (await env.repos.stats.channel_days([-1001]))[-1001]
+    assert (c["joins_total"], c["leaves_total"]) == (3, 1) and (day["joins"], day["leaves"]) == (3, 1)
+
+
+async def test_private_channel_requests_today_and_total(env):
+    v = await req_channel(env)
+    for uid in (1, 2, 3, 4, 5):
+        await v.on_join_request(-1001, uid, 1, OURS)
+    day = (await env.repos.stats.channel_days([-1001]))[-1001]
+    assert day["requests"] == 5 and (await env.repos.channels.get(-1001))["requests_received"] == 5
+
+
+def test_today_follows_india_time_not_utc():
+    from datetime import datetime, timezone
+    from app.utils.clock import today
+    assert today(datetime(2026, 10, 15, 18, 29, tzinfo=timezone.utc)) == "2026-10-15"   # 23:59 IST
+    assert today(datetime(2026, 10, 15, 18, 31, tzinfo=timezone.utc)) == "2026-10-16"   # 00:01 IST next day
+
+
+async def test_reset_zeroes_channel_numbers_but_keeps_rotation(env):
+    v = await req_channel(env)
+    await v.on_join_request(-1001, 1, 1, OURS)
+    await v.record_membership_change(-1001, 1, joined=True)
+    await env.repos.channels.inc(-1001, "presented", 3)
+    await env.repos.channels.reset_stats()
+    await env.repos.stats.reset_channel_days()
+    c = await env.repos.channels.get(-1001)
+    assert (c["requests_received"], c["joins_total"], c["leaves_total"]) == (0, 0, 0) and c["presented"] == 3
+    assert await env.repos.stats.channel_days([-1001]) == {}
+
+
+async def test_global_today_block_counts_new_users_requests_and_deliveries(env):
+    await env.repos.users.touch(1, "A", None, "a")
+    await env.repos.stats.inc_new_user()
+    await env.repos.stats.inc("requests")
+    await env.repos.stats.inc("requests")
+    await env.repos.stats.inc("deliveries_ok")
+    t = await env.repos.stats.today_totals()
+    assert (t["new_users"], t["requests"], t["deliveries_ok"]) == (1, 2, 1)
+
+
+async def test_chat_member_handler_counts_real_joins_and_leaves_only(env):
+    from app.handlers.verification import on_chat_member
+    await make_channel(env, -1001, "public")
+    ctx = NS(verification=env.verification, repos=env.repos, i18n=env.i18n, bot=env.bot, delivery=env.delivery,
+             cfg=NS(flow_ttl_seconds=1800), lifecycle=NS(schedule=lambda *a, **k: None))
+
+    def upd(old, new, uid=5, bot=False):
+        mk = lambda st: NS(status=st, user=NS(id=uid, is_bot=bot))  # noqa: E731
+        return NS(chat=NS(id=-1001), old_chat_member=mk(old), new_chat_member=mk(new))
+    await on_chat_member(upd("left", "member"), ctx)
+    await on_chat_member(upd("member", "administrator"), ctx)    # promotion: not a join
+    await on_chat_member(upd("member", "left"), ctx)
+    await on_chat_member(upd("left", "kicked"), ctx)             # never a member: not a leave
+    await on_chat_member(upd("left", "member", uid=9, bot=True), ctx)
+    c = await env.repos.channels.get(-1001)
+    assert (c["joins_total"], c["leaves_total"]) == (1, 1)

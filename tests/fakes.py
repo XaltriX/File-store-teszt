@@ -203,6 +203,7 @@ class FakeBot:
         self.calls: list[tuple[str, dict]] = []
         self.raise_on: dict[str, object] = {}
         self.members: dict[tuple[int, int], object] = {}
+        self.reply_duration: int | None = None  # make send_video etc. return a message carrying a duration
 
     def _maybe_raise(self, method):
         r = self.raise_on.get(method)
@@ -220,7 +221,12 @@ class FakeBot:
             self.calls.append((name, {"args": args, **kwargs}))
             if name == "get_chat_member":
                 return self.members.get((args[0], args[1]), type("M", (), {"status": "left"})())
-            return type("Msg", (), {"message_id": len(self.calls)})()
+            msg = type("Msg", (), {"message_id": len(self.calls)})()
+            kind = {"send_video": "video", "send_audio": "audio", "send_voice": "voice", "send_animation": "animation",
+                    "send_video_note": "video_note"}.get(name)
+            if kind and self.reply_duration is not None:
+                setattr(msg, kind, type("Media", (), {"duration": self.reply_duration})())
+            return msg
         return call
 
     def sent(self, method):

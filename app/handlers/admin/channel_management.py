@@ -134,12 +134,17 @@ async def manage(cb: CallbackQuery, ctx, t) -> None:
     await cb.answer()
 
 
-def channel_stats_text(t, c: dict) -> str:
-    last = c.get("last_activity")
-    return t("a_channel_stats_row", title=esc(c["title"]), mode=c["mode"], active="yes" if c["active"] else "no",
-             presented=c.get("presented", 0), joins=c.get("joins_confirmed", 0), requests=c.get("requests_received", 0), repeat=c.get("requests_repeat", 0), other=c.get("requests_other", 0),
-             failed=c.get("failed_checks", 0), errors=c.get("errors", 0),
-             last=last.strftime("%Y-%m-%d %H:%M") if last else "-")
+def channel_stats_text(t, c: dict, day: dict | None = None) -> str:
+    day = day or {}
+    extra = ""
+    if c.get("requests_other"):
+        extra += "\n" + t("a_cs_other", n=c["requests_other"])
+    if c.get("errors"):
+        extra += "\n" + t("a_cs_errors", n=c["errors"])
+    return t("a_channel_stats_row", icon="🟢" if c["active"] else "⚪", title=esc(c["title"]),
+             kind="private · requests" if c["mode"] == "request" else "public",
+             tj=day.get("joins", 0), tl=day.get("leaves", 0), tr=day.get("requests", 0),
+             j=c.get("joins_total", 0), l=c.get("leaves_total", 0), r=c.get("requests_received", 0), extra=extra)
 
 
 async def render_channel(cb, ctx, t, cid: int) -> None:
@@ -147,7 +152,8 @@ async def render_channel(cb, ctx, t, cid: int) -> None:
     if not c or c.get("removed"):
         await cb.answer(t("a_channel_gone"), show_alert=True)
         return
-    text = channel_stats_text(t, c) + f"\n\n🔗 <code>{esc(c['url'])}</code>"
+    day = (await ctx.repos.stats.channel_days([cid])).get(cid)
+    text = channel_stats_text(t, c, day) + f"\n\n🔗 <code>{esc(c['url'])}</code>"
     rows = [[btn("⏸ Deactivate" if c["active"] else "▶️ Activate", f"a:c:tg:{cid}"),
              btn("🔁 Mode: " + c["mode"], f"a:c:mode:{cid}")]]
     if c["mode"] == "request":
@@ -242,11 +248,26 @@ async def stats(cb: CallbackQuery, ctx, t) -> None:
     page = page_of(cb.data) if cb.data.count(":") >= 3 else 0
     total = await ctx.repos.channels.count()
     chans = await ctx.repos.channels.list(page=page, size=5)
-    body = "\n\n".join(channel_stats_text(t, c) for c in chans) or t("a_channel_none")
+    days = await ctx.repos.stats.channel_days([c["_id"] for c in chans])
+    body = "\n\n".join(channel_stats_text(t, c, days.get(c["_id"])) for c in chans) or t("a_channel_none")
     rows = [pager_row("a:c:stats", page, total, 5)] if total > 5 else []
+    rows.append([btn("🔄 Refresh", f"a:c:stats:{page}"), btn("🧹 Reset", "a:c:statreset")])
     rows.append([btn("↩️ Channels", "a:c")])
     await show(cb, t("a_channel_stats_title") + "\n\n" + body, kb(*rows))
     await cb.answer()
+
+
+@router.callback_query(F.data == "a:c:statreset")
+async def stats_reset_ask(cb: CallbackQuery, t) -> None:
+    await show(cb, t("a_cs_reset_confirm"), confirm("a:c:statresetc", "a:c:stats:0", "🧹 Reset"))
+    await cb.answer()
+
+
+@router.callback_query(F.data == "a:c:statresetc")
+async def stats_reset_do(cb: CallbackQuery, ctx, t) -> None:
+    await ctx.repos.channels.reset_stats()
+    await ctx.repos.stats.reset_channel_days()
+    await stats(cb, ctx, t)
 
 
 @router.callback_query(F.data == "a:c:steps")

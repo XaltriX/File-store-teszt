@@ -14,8 +14,7 @@ class StatisticsService:
 
     async def detailed(self) -> dict:
         r = self.repos
-        since = datetime.now(timezone.utc) - timedelta(days=7)
-        return {**await r.stats.totals(), "users": await r.users.count(),
-                "audience": await r.users.count_audience(), "new_7d": await r.users.count_since(since),
-                "files": await r.files.count(), "links": await r.links.count_active(),
-                "by_day": await r.stats.new_users_by_day(7)}
+        today = await r.stats.today_totals()
+        return {**await r.stats.totals(), "users": await r.users.count(), "files": await r.files.count(),
+                "t_users": today["new_users"], "t_opens": today["requests"], "t_delivered": today["deliveries_ok"],
+                "t_requests": today["private_requests"]}

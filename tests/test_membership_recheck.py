@@ -89,10 +89,3 @@ async def test_still_pending_request_keeps_counting_for_later_files(env):
     assert (await env.verification.start(U, l2["token"])).kind == "deliver"  # user can't re-request while pending
 
 
-async def test_selector_keeps_previous_channels_then_balances_the_rest():
-    import random
-    from app.services.channel_selector import select_sticky
-    ch = [{"_id": i, "presented": p} for i, p in ((1, 9), (2, 0), (3, 5))]
-    out = select_sticky(ch, [1], 2, "least", random.Random(0))
-    assert [c["_id"] for c in out] == [1, 2]
-    assert [c["_id"] for c in select_sticky(ch, [99], 1, "least", random.Random(0))] == [2]  # removed channel ignored

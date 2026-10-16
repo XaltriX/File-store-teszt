@@ -44,7 +44,7 @@ def settings_menu() -> M:
               [btn("🎬 More Videos URL", "a:t:mv"), btn("👨‍💻 Developer URL", "a:t:dv")],
               [btn("ℹ️ About Text", "a:t:ab"), btn("🔐 Default Protection", "a:t:prot")],
               [btn("🧹 Message Timer", "a:t:ad"), btn("🗑 File Auto-delete", "a:t:fd")],
-              [btn("🌐 Language Options", "a:t:lang")], [BACK_HOME])
+              [btn("🌐 Language Options", "a:t:lang"), btn("🧪 Reset my language", "a:t:rl")], [BACK_HOME])
 
 
 def confirm(yes: str, no: str, label: str = "✅ Confirm") -> M:

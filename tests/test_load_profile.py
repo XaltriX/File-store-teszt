@@ -43,7 +43,6 @@ async def test_returning_member_costs_zero_db_round_trips_after_warmup():
     db, repos, bot, links, ver, writer = build()
     f, link = await seed(repos, links)
     await repos.users.touch(1, "A", None, "a")   # the middleware registers every user before any handler runs
-    await repos.users.set_fsub(1, [-1001])
     members(bot, [1], [-1001])
     await ver.start(1, link["token"])          # warm caches (settings, channels, link, user)
     repos.requests.reset_guards()
@@ -59,7 +58,6 @@ async def test_300_returning_users_at_once_do_not_touch_the_db_and_counters_are_
     uids = list(range(1000, 1300))
     for u in uids:
         await repos.users.touch(u, "A", None, "a")
-        await repos.users.set_fsub(u, [-1001])
     members(bot, uids, [-1001])
     await writer.flush()
     await ver.start(uids[0], link["token"])    # warm up

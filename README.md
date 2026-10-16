@@ -15,7 +15,7 @@ Stack: Python 3.12, aiogram 3.13 (Bot API, no `API_ID`/`API_HASH`), PyMongo asyn
 | Links | 128-bit `secrets.token_urlsafe` tokens (22 chars), unique index. Many links per file; revoking one never touches others. |
 | Flows | Persisted in `flows`. Channels are chosen once (least-presented, random tie-break, distinct) and never re-rolled on Verify. `presented` is incremented atomically at assignment. |
 | Language | Asked on first contact for everyone who has not explicitly chosen one (`lang_chosen`), also when they arrive through a file link; accounts whose language was only auto-detected by an older version are asked once more. |
-| Join-request stats | `Join requests` = **unique users** who requested through the bot's current link, cumulative since stats began (not Telegram's *pending* count). Repeat requests by the same user and requests through other/old invite links are counted separately per channel. |
+| Statistics | Simple: per channel, **today and total**: 👥 joined / left (real member changes seen via `chat_member`, bot must be admin) and 📨 join requests through the bot's invite link (other/old links shown separately). Global block: today's new users, files requested/delivered, join requests. "Today" uses `TIMEZONE` (default `Asia/Kolkata`). Counting starts at deploy; Channels → Channel Statistics → 🧹 Reset zeroes it. |
 | Auto-verify | On link open the bot first checks every assigned channel: users who already joined (or already sent a join request) skip the card. While waiting, `chat_member` updates (public/any channel) and `chat_join_request` updates advance the flow and deliver the file automatically, with no button press. Requires the bot to be **admin** in each channel. |
 | DB channel | Files → DB Channel: set a channel (bot = admin). Every file posted there is saved and its link is DM'd to the admin who set it, plus optionally replied inside the channel (needs "Post messages"). Admins can also just send a file to the bot (no button) to get a link. |
 | Welcome media | Photo, video or GIF (50 MB bot limit; 3-8 s loops work best). Saved immediately, preview shown after (no pending "Apply" step). |
@@ -25,7 +25,7 @@ Stack: Python 3.12, aiogram 3.13 (Bot API, no `API_ID`/`API_HASH`), PyMongo asyn
 | Idempotency | `mark_done` is an atomic conditional update; `claim_completion` (`find_one_and_update`) elects exactly one deliverer; 2s `/start` guard and 5s repeat-access guard use an atomic TTL guard. |
 | Join requests | A stored join request counts until it turns into membership (then it is consumed, so leaving later requires a new request). A request still pending keeps counting for up to 7 days, because Telegram does not let the user send a second one. If the membership lookup itself fails, a stored request is never trusted. Consumption relies on seeing the user as a member once (link open or `chat_member` update). |
 | Delivery failure | Flow is re-opened so the user can press Verify again. |
-| Re-verification | **Every file request is verified again.** Users still in their channels get the file instantly (no card); a user who left a channel is asked to rejoin the same channel (their previous channels are kept so rotation doesn't hand them a new one each time). Completed flows are kept 14 days only to remember those channels. |
+| Required steps | Settings → Channels → Required Steps (1-3) = **how many channels the user must join for a file**. On every file link the bot checks the whole pool live and asks only for channels the user is NOT in (least-shown first, random ties); one card lists them all (numbered, ✅ for finished ones, progress `1/3`). In every channel already → file at once. A channel the user later leaves is asked for again on the next file. |
 | Auto-delete | One persisted queue (`pending_deletes`) + one worker. Status/error messages use the admin timer (default 60 s, 0 = off). Verification cards live for the whole 30-min flow and are removed on delivery. Delivered files are never auto-deleted. Survives restarts. |
 | Broadcasts | `copy_message` of the admin's message. Job doc holds counters + cursor; per-recipient outcome is one small doc in `broadcast_deliveries` (unique `(bid, uid)`), so resume never re-sends. 20 msgs/s batches, bounded retries with backoff+jitter, blocked users marked and skipped, graceful shutdown marks the job `interrupted` and it resumes on next start. |
 | Admin panel | Admins see a **🛠 Admin Panel** button under the `/start` welcome card (`/admin` still works). Authorization is checked server-side on every admin callback. |
@@ -33,8 +33,9 @@ Stack: Python 3.12, aiogram 3.13 (Bot API, no `API_ID`/`API_HASH`), PyMongo asyn
 | FSM | Admin input flows use in-memory FSM storage (short-lived by design). Everything durable is in MongoDB. |
 | Concurrency | Updates are handled concurrently: different users in parallel, the same user in order (per-user lock), global cap of 40 handlers, and a 45 s hard limit per update so one stuck call can never freeze the bot. |
 | Latency | Settings (5 s) and user records (60 s) are cached in-process and invalidated on write, so button presses do 0 DB reads; link opens run their independent lookups in parallel and all channel membership checks concurrently. Every MongoDB operation has a socket/connect/pool timeout and the Telegram HTTP session has a 25 s timeout. |
+| DB channel | Files → DB Channel. Anything you send to the bot (in any admin menu state except the ones that expect media) is copied into the DB channel and the confirmation always says **✅ copied / ⚠️ NOT copied + why / not set**. Needs the bot as admin with “Post messages”. Files posted in the DB channel itself are saved too. |
 | Delivered files | Sent by `copy_message` from the DB-channel copy (durable), falling back to the stored `file_id`. Files sent straight to the bot are copied into the DB channel automatically. |
-| File auto-delete | Settings → File Auto-delete. **Auto (default):** each delivered media is removed after its own length + 1 minute (a 2-min video stays 3 min; max 24 h); files without a length (documents, photos) use 5 min; or pick a fixed 1m-1h / Off. A short notice is removed together with the file; the user can reopen the link to get it again. Persisted, survives restarts, deletes run concurrently. |
+| File auto-delete | Settings → File Auto-delete. **Auto (default):** each delivered media is removed after its own length + 1 minute (a 2-min video stays 3 min; max 24 h); documents/photos (no length) use 5 min; or a fixed 1m-1h / Off. If the length is unknown the first delivery sends by `file_id`, reads the length from Telegram's reply, saves it and uses it right away; files sent as *documents* have no length at all, so use File → ⏱ Set length (or send videos as videos). A short notice is removed with the file. |
 
 ### Deliberate deviations / interpretations
 - If fewer active channels exist than the configured steps (1–3), the flow requires fewer steps instead of repeating a channel.
@@ -94,22 +95,25 @@ git push heroku main
 heroku ps:scale web=0 worker=1 -a your-filestore-bot
 heroku logs --tail -a your-filestore-bot
 ```
-Config Vars: `BOT_TOKEN`, `MONGO_URL`, `ADMIN_IDS` (required); `MONGO_DB`, `LOG_LEVEL`, `DEFAULT_LANGUAGE` (optional).
+Config Vars: `BOT_TOKEN`, `MONGO_URL`, `ADMIN_IDS` (required); `MONGO_DB`, `LOG_LEVEL`, `DEFAULT_LANGUAGE`, `TIMEZONE` (optional; IANA name, default `Asia/Kolkata`).
 Never run the bot locally and on Heroku with the same token at once (Telegram allows one polling consumer; you will get conflict errors). On startup the bot calls `deleteWebhook` and exits with a clear error if MongoDB or the token is invalid.
 
 **Restart / recovery:** `heroku ps:restart worker`. On SIGTERM the bot stops polling, interrupts any running broadcast (status `interrupted`) and closes connections. On next start: interrupted broadcasts resume without duplicates, active verification flows continue, due auto-deletes are processed. A temporary deletion is delayed (not lost) while the dyno is down.
 
 ## How it stays fast under a crowd
 Design rules (inspired by studying a fast reference bot, not copied from it):
-- **Returning users cost 0 DB round-trips.** The channels a user last satisfied are remembered on their user record; on the next link open the bot only re-checks live membership of those channels (concurrently, behind a global cap) and delivers. No flow document, no writes.
-- **New users** cost ~3-4 round-trips (user, active flow, create flow; a few more on completion).
+- **Members of every channel cost 0 DB round-trips.** The bot checks live membership of the pool (concurrently, behind a global cap) and delivers; no flow document, no writes.
+- **Users who must join something** cost ~3-4 round-trips (active flow, create flow; a few more on completion).
 - **Cached reads:** settings (5 s), user records (60 s), link+file resolution (30 s, invalidated automatically on revoke/archive/delete/protect changes), channel list (20 s, invalidated on admin changes). Join-request lookups use an in-memory set (warmed at startup), so a normal member check never touches the DB.
 - **Write-behind:** counters, last-activity and auto-delete schedules are aggregated in memory and flushed every 1.5 s in a handful of writes (and on shutdown), so traffic volume doesn't multiply DB writes. Worst case on a hard crash: ~1.5 s of statistics/delete schedules.
 - **Telegram protection:** `getChatMember` is capped (12 concurrent) with a 5 s positive cache; every outgoing call goes through a flood-control middleware that waits out `retry_after` and caps simultaneous requests (30).
 - **Admins bypass the global handler cap**, so the panel stays responsive while users queue.
-- `tests/test_load_profile.py` counts DB round-trips: 299 simultaneous returning users = 0 round-trips.
+- `tests/test_load_profile.py` counts DB round-trips: 299 simultaneous members-of-everything users = 0 round-trips.
 
 Optional: on platforms that need a bound port (Heroku *web* dyno, Render, Koyeb) set `PORT` and the bot also serves `GET /health`; for Heroku keep `worker`.
+
+## Handy commands
+`/id` shows your numeric Telegram ID and whether it is in `ADMIN_IDS` (if the 🛠 Admin Panel button is missing under `/start`, it isn't). `/language` reopens the language screen; Settings → 🧪 Reset my language lets an admin test the first-contact flow again.
 
 ## Performance tips
 - Create the Atlas cluster in the **same region as your Heroku app** (Heroku has US/EU only). Every DB round trip pays that latency.

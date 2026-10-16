@@ -8,7 +8,7 @@ def now() -> datetime:
 
 
 COUNTERS = ("presented", "joins_confirmed", "requests_received", "requests_repeat", "requests_other",
-            "failed_checks", "errors")
+            "joins_total", "leaves_total", "failed_checks", "errors")
 
 
 class ChannelsRepo:
@@ -93,6 +93,12 @@ class ChannelsRepo:
 
     async def soft_remove(self, chat_id: int) -> None:
         await self.col.update_one({"_id": chat_id}, {"$set": {"removed": True, "active": False}})
+        self._invalidate()
+
+    async def reset_stats(self) -> None:
+        """Zero the statistics counters (keeps `presented`, which drives channel balancing)."""
+        zero = {c: 0 for c in COUNTERS if c != "presented"}
+        await self.col.update_many({}, {"$set": zero})
         self._invalidate()
 
     async def reset_presented(self) -> None:

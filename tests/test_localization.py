@@ -23,7 +23,7 @@ def test_no_untranslated_english_leftovers_in_non_english():
         if code == "en":
             continue
         d = load(code)
-        same = [k for k in d if d[k] == en[k] and k not in ("btn_dev",)]
+        same = [k for k in d if d[k] == en[k] and k not in ("btn_dev", "lang_prompt")]  # lang_prompt is deliberately one multilingual text
         assert not same, (code, same)
 
 

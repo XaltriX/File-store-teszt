@@ -15,6 +15,7 @@ log = logging.getLogger(__name__)
 SEND_METHOD = {"document": "send_document", "video": "send_video", "audio": "send_audio",
                "voice": "send_voice", "animation": "send_animation", "video_note": "send_video_note",
                "sticker": "send_sticker", "photo": "send_photo"}
+DURATION_TYPES = {"video", "audio", "voice", "animation", "video_note"}
 CAPTIONABLE = {"document", "video", "audio", "voice", "animation", "photo"}
 MAX_ATTEMPTS = 3
 AUTO_MARGIN = 60      # seconds added to the media length
@@ -59,12 +60,19 @@ class DeliveryService:
         cap = {"caption": self.i18n.t(lang, "file_ready")} if ftype in CAPTIONABLE else {}
         attempts = []
         store = file.get("store")
+        direct = lambda: getattr(self.bot, method)(chat_id=user_id, **{ftype: file["file_id"]},  # noqa: E731
+                                                   protect_content=protect, reply_markup=markup, **cap)
+        # copy_message does not tell us the media length; when it is unknown send by file_id ONCE (the reply
+        # carries the duration), remember it, and use the DB copy from then on.
+        learn = ftype in DURATION_TYPES and not file.get("duration")
+        if learn:
+            attempts.append(direct)
         if store:  # the DB-channel copy is the durable source; file_id is only the fallback
             attempts.append(lambda: self.bot.copy_message(chat_id=user_id, from_chat_id=store["chat_id"],
                                                           message_id=store["message_id"], protect_content=protect,
                                                           reply_markup=markup, **cap))
-        attempts.append(lambda: getattr(self.bot, method)(chat_id=user_id, **{ftype: file["file_id"]},
-                                                          protect_content=protect, reply_markup=markup, **cap))
+        if not learn:
+            attempts.append(direct)
         msg, exc = None, None
         for send in attempts:
             msg, exc = await self._retrying(send)
@@ -79,6 +87,11 @@ class DeliveryService:
             await self.repos.stats.inc("deliveries_failed")
             return "err_unavailable" if isinstance(exc, TelegramBadRequest) else "err_delivery"
         await self.repos.stats.inc("deliveries_ok")
+        if learn:
+            dur = getattr(getattr(msg, ftype, None), "duration", None)
+            if isinstance(dur, (int, float)) and dur > 0:
+                file["duration"] = int(dur)  # used for THIS delivery's timer too
+                await self.repos.files.set_duration(file["_id"], int(dur))
         await self._schedule_cleanup(user_id, lang, getattr(msg, "message_id", None), file)
         return None
 

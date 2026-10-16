@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from aiogram.exceptions import TelegramAPIError
 
-from app.services.channel_selector import select_sticky
+from app.services.channel_selector import select_channels
 
 log = logging.getLogger(__name__)
 MEMBER_STATUSES = {"creator", "administrator", "member"}
@@ -21,6 +21,7 @@ class Step:
     file: dict | None = None
     link: dict | None = None
     key: str | None = None
+    channels: list | None = None  # all channels still to be joined (one card shows them together)
 
 
 def is_member(cm) -> bool:
@@ -70,28 +71,23 @@ class VerificationService:
         cfg, eligible, user, _ = await asyncio.gather(
             r.settings.get(), r.channels.eligible(), r.users.get(user_id), r.stats.inc("requests"))
         n = int(cfg["required_steps"])
-        prev = list((user or {}).get("fsub_ids") or [])
-        known: dict[int, str] = {}
-        # FAST PATH (returning users): no flow, no writes. Re-check live membership of the channels they
-        # verified last time; still a member of all of them -> deliver at once, otherwise ask again.
-        cand = sorted((c for c in eligible if c["_id"] in prev), key=lambda c: prev.index(c["_id"]))[:n]
-        if cand and len(cand) >= min(n, len(eligible)):
-            outs = await asyncio.gather(*(self._check(c, user_id) for c in cand))
-            known = {c["_id"]: o for c, o in zip(cand, outs)}
-            if all(o in self.OK for o in outs):
-                return Step("deliver", file=res.file, link=res.link)
+        if not eligible:  # nothing to ask: deliver
+            if not await r.requests.claim(f"dl:{user_id}:{token}", 5):
+                return Step("noop")
+            return Step("deliver", file=res.file, link=res.link)
+        # Live check of the whole pool (concurrent, capped). A channel the user is already in (or has a still
+        # unconsumed join request for) counts as done; the user is only asked for channels they are NOT in.
+        outs = await asyncio.gather(*(self._check(c, user_id) for c in eligible))
+        known = {c["_id"]: o for c, o in zip(eligible, outs)}
+        missing = [c for c, o in zip(eligible, outs) if o not in self.OK]
+        if not missing:
+            return Step("deliver", file=res.file, link=res.link)  # member everywhere: file at once, no flow, no writes
         flow = await r.requests.find_active(user_id, fid)
         if flow is None:
-            chosen = select_sticky(eligible, prev, n, cfg["balancing"], self.rng)
-            if not chosen:
-                if not await r.requests.claim(f"dl:{user_id}:{token}", 5):
-                    return Step("noop")
-                return Step("deliver", file=res.file, link=res.link)
+            chosen = select_channels(missing, n, cfg["balancing"], self.rng)  # least shown first, random ties
             ids = [c["_id"] for c in chosen]
             flow = await r.requests.create_flow(user_id, fid, token, ids, self.ttl)
-            new_ids = [i for i in ids if i not in prev]  # sticky channels are not re-counted as "presented"
-            if new_ids:
-                await r.channels.inc_many(new_ids, "presented")
+            await r.channels.inc_many(ids, "presented")
         return await self._verify_loop(flow["_id"], user_id, silent=True, flow=flow, known=known)
 
     async def verify(self, flow_id: str, user_id: int) -> Step:
@@ -120,26 +116,36 @@ class VerificationService:
     async def on_join_request(self, chat_id: int, user_id: int, request_ts: int,
                               invite_link: str | None = None) -> list[Step]:
         """Any pool channel: a join-request event only exists when the channel needs approval.
-        Statistics: `requests_received` = UNIQUE users who requested through OUR link (first time only);
-        repeats and requests through other/old links are counted separately so totals stay explainable."""
+        Statistics: every distinct request through OUR invite link is counted (like the link's own
+        counter); requests through other/old links are counted apart."""
         ch = await self.repos.channels.get(chat_id)
         if not ch or ch.get("removed"):
             return []
         outcome = await self.repos.requests.record_join_request(chat_id, user_id, request_ts, invite_link)
         if outcome == "dup":
             return []  # same event redelivered
-        if not self.via_our_link(ch, invite_link):
-            await self.repos.channels.inc(chat_id, "requests_other")
-        elif outcome == "repeat":
-            await self.repos.channels.inc(chat_id, "requests_repeat")
-        else:
+        if self.via_our_link(ch, invite_link):
             await self.repos.channels.inc(chat_id, "requests_received")
             await self.repos.stats.inc("private_requests")
+            await self.repos.stats.inc_channel_day(chat_id, "requests")
+        else:  # a request through some other / old invite link: tracked apart so the numbers stay explainable
+            await self.repos.channels.inc(chat_id, "requests_other")
+            await self.repos.stats.inc_channel_day(chat_id, "other")
         steps = []
         for flow in await self.repos.requests.active_for_user_channel(user_id, chat_id):
             if await self.repos.requests.mark_done(flow["_id"], chat_id):
                 steps.append(await self._verify_loop(flow["_id"], user_id, silent=True))
         return steps
+
+    async def record_membership_change(self, chat_id: int, user_id: int, joined: bool, is_bot: bool = False) -> None:
+        """Every real join / leave of a pool channel (seen via chat_member updates), flows or not."""
+        if is_bot:
+            return
+        ch = await self.repos.channels.get(chat_id)
+        if not ch or ch.get("removed"):
+            return
+        await self.repos.channels.inc(chat_id, "joins_total" if joined else "leaves_total")
+        await self.repos.stats.inc_channel_day(chat_id, "joins" if joined else "leaves")
 
     async def on_member_joined(self, chat_id: int, user_id: int) -> list[Step]:
         """chat_member update: user became a member of a pool channel -> advance their flows."""
@@ -181,9 +187,9 @@ class VerificationService:
             else:
                 pending.append(ch)
         outcomes = await asyncio.gather(*(self._known_or_check(ch, user_id, known) for ch in pending))
-        progressed = False
+        progressed, remaining, first_fail = False, [], None
         for ch, outcome in zip(pending, outcomes):
-            if outcome in ("ok", "ok_request"):
+            if outcome in self.OK:
                 # counters only for joins the user made while being asked (button press), never for
                 # people who were already members when they opened the link
                 if await r.requests.mark_done(flow_id, ch["_id"]) and not silent \
@@ -191,12 +197,15 @@ class VerificationService:
                     await r.channels.inc(ch["_id"], "joins_confirmed")
                     await r.stats.inc("public_confirmed")
                 progressed = True
-                continue
-            if silent or progressed:  # show the card for the first unsatisfied channel
-                return Step("prompt", flow=flow, channel=ch)
-            if outcome == "verify_not_member":
-                await r.channels.inc(ch["_id"], "failed_checks")
-            return Step("retry", flow=flow, channel=ch, key=outcome)
+            else:
+                remaining.append(ch)
+                first_fail = first_fail or outcome
+        if remaining:
+            if not silent and not progressed:
+                if first_fail == "verify_not_member":
+                    await r.channels.inc(remaining[0]["_id"], "failed_checks")
+                return Step("retry", flow=flow, channel=remaining[0], channels=remaining, key=first_fail)
+            return Step("prompt", flow=flow, channel=remaining[0], channels=remaining)
         return await self._advance(flow_id)  # everything satisfied -> complete + deliver exactly once
 
     async def _known_or_check(self, ch: dict, user_id: int, known: dict) -> str:
@@ -230,11 +239,10 @@ class VerificationService:
             if not ch or ch.get("removed") or not ch.get("active"):
                 await self.repos.requests.mark_done(flow_id, cid)  # channel left the pool: don't strand user
                 continue
-            return Step("prompt", flow=flow, channel=ch)
+            return Step("prompt", flow=flow, channel=ch, channels=[ch])
         won = await self.repos.requests.claim_completion(flow_id)
         if won is None:
             return Step("noop", flow=flow)
-        await self.repos.users.set_fsub(won["user_id"], won["channel_ids"])  # returning users take the fast path
         file, link = await asyncio.gather(self.repos.files.get(won["file_id"]), self.repos.links.get(won["token"]))
         if not file or not link:
             return Step("error", key="err_unavailable")

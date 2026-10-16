@@ -196,6 +196,12 @@ async def file_autodelete(cb: CallbackQuery, ctx, t) -> None:
     await cb.answer()
 
 
+@router.callback_query(F.data == "a:t:rl")
+async def reset_my_language(cb: CallbackQuery, ctx, t) -> None:
+    await ctx.repos.users.reset_language(cb.from_user.id)
+    await cb.answer(t("a_lang_reset"), show_alert=True)
+
+
 # ------------------------------------------------------------------ languages
 async def _lang_screen(cb, ctx, t) -> None:
     s = await ctx.repos.settings.get()
