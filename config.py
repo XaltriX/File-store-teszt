@@ -55,7 +55,7 @@ def load_config(env: dict | None = None) -> Config:
     return Config(
         bot_token=token,
         mongo_url=mongo,
-        mongo_db=(e.get("MONGO_DB") or "filestore").strip(),
+        mongo_db=(e.get("MONGO_DB") or "devil99").strip(),
         admin_ids=frozenset(admins),
         log_level=(e.get("LOG_LEVEL") or "INFO").upper(),
         default_language=(e.get("DEFAULT_LANGUAGE") or "en").lower(),
